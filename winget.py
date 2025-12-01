@@ -566,7 +566,6 @@ class WingetApp:
 
     def _bind_mousewheel(self, widget, canvas):
         def _on_mousewheel(event):
-            # Kontrola, zda je co scrollovat (bbox vs height)
             if canvas.bbox("all"):
                 scroll_height = canvas.bbox("all")[3]
                 visible_height = canvas.winfo_height()
@@ -614,7 +613,7 @@ class WingetApp:
         
         SCÉNÁŘ B (Obecný popis/Kategorie):
         Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
-        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu).
+        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
         
         Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
         QUERIES: název1;název2;název3
@@ -684,7 +683,7 @@ class WingetApp:
 
         INSTRUKCE:
         1. Analyzuj surová data a najdi aplikace, které odpovídají záměru uživatele.
-        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace.
+        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace. (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu). Pokud se budou nacházet dvě verze určitého programu např. GIMP má z nějakého důvodu ve wingetu 2 verze, vždy vyber tu novější.
         3. Extrahuj Název, ID a Verzi.
         4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace (např. jsi ji sám navrhl v předchozím kroku), pokus se ID odhadnout (např. 'Mozilla.Firefox').
         
@@ -826,6 +825,7 @@ class WingetApp:
         if not self.queue_data:
             messagebox.showwarning("Pozor", "Seznam je prázdný.")
             return False
+            
         try:
             with open(OUTPUT_FILE, "w", encoding="utf-8") as f: 
                 f.write("@echo off\nchcp 65001 > nul\necho Zahajuji instalaci...\n\n")
@@ -836,13 +836,20 @@ class WingetApp:
                 f.write("\necho Hotovo!\n")
             return True
         except Exception as e:
-            messagebox.showerror("Chyba", str(e)); return False
+            messagebox.showerror("Chyba", str(e))
+            return False
 
     def save_only(self):
-        if self._create_batch_file(): messagebox.showinfo("Uloženo", f"Soubor: {OUTPUT_FILE}")
+        if self._create_batch_file(): 
+            messagebox.showinfo("Uloženo", f"Soubor: {OUTPUT_FILE}")
 
     def install_now(self):
-        if self._create_batch_file(): InstallationDialog(self.root, list(self.queue_data.values()))
+        if not self.queue_data:
+            messagebox.showwarning("Pozor", "Seznam je prázdný.")
+            return
+
+        # Spuštění instalace přímo (předáváme data z paměti, ne soubor)
+        InstallationDialog(self.root, list(self.queue_data.values()))
 
 if __name__ == "__main__":
     root = tk.Tk()
