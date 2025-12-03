@@ -960,61 +960,130 @@ class InstallerPage(tk.Frame):
 
     def get_winget_ids_thread(self, user_request):
         model = genai.GenerativeModel('gemini-2.5-flash') 
+        
         print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
+        
+        # 1. KROK: Zjištění záměru (Intent Recognition)
+        # Ptáme se AI: Je to název, nebo kategorie?
         intent_prompt = f"""
         Jsi expert na Windows software a Winget repozitář.
         Uživatel zadal: "{user_request}"
+
         Tvým úkolem je rozhodnout, jak tento dotaz hledat ve Winget.
-        SCÉNÁŘ A (Konkrétní aplikace): Pokud uživatel myslí konkrétní program (i s překlepem), vráť POUZE opravený název.
-        SCÉNÁŘ B (Obecný popis/Kategorie): Pokud uživatel hledá typ programu, vyber několik NEJLEPŠÍCH aplikací.
-        Odpověz POUZE v tomto formátu: QUERIES: název1;název2;název3
+        
+        SCÉNÁŘ A (Konkrétní aplikace):
+        Pokud uživatel myslí konkrétní program (i s překlepem, např. "discrd", "chrom", "vlc"),
+        vráť POUZE opravený název.
+        
+        SCÉNÁŘ B (Obecný popis/Kategorie):
+        Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
+        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
+        
+        Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
+        QUERIES: název1;název2;název3
         """
+
         search_terms = []
         try:
             intent_response = model.generate_content(intent_prompt)
             raw_intent = intent_response.text.strip()
+            
+            # Parsování odpovědi (očekáváme "QUERIES: app1;app2...")
             if "QUERIES:" in raw_intent:
                 clean_line = raw_intent.replace("QUERIES:", "").strip()
+                # Rozdělíme středníkem a vyčistíme
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
+                # Fallback, kdyby AI neodpověděla správně
                 search_terms = [user_request]
+                
             print(f"AI navrhlo hledat tyto výrazy: {search_terms}")
+
         except Exception as e:
             print(f"Chyba při zjišťování záměru: {e}")
             search_terms = [user_request]
 
+        # 2. KROK: Hromadné hledání ve Winget
+        # Spustíme hledání pro každý výraz, který AI navrhlo
         combined_output = ""
+        
         self.progress['maximum'] = len(search_terms) * 100
         current_prog = 0
         
         for term in search_terms:
             try:
+                # Omezíme výsledky (-n 3) aby toho nebylo moc pro další AI analýzu
                 cmd = f'winget search "{term}" --source winget --accept-source-agreements -n 3'
+                
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
                 print(f"Spouštím Winget pro: {term}")
                 result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
+                
+                # Přidáme výstup do jednoho velkého textu
                 combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n"
                 combined_output += result.stdout
+                
             except Exception as e:
                 print(f"Winget search selhal pro {term}: {e}")
+            
+            # Aktualizace progress baru (jen vizuálně)
             current_prog += 100
+            # V threadu nemůžeme přímo měnit GUI bezpečně, ale u jednoduchých proměnných to v Tkinteru často projde. 
+            # Správnější by bylo frontování, ale pro jednoduchost necháme běžet.
 
+        # 3. KROK: Finální filtrace a formátování na JSON
+        # Teď máme "špinavý" výstup z několika hledání, AI z toho musí vytáhnout to důležité.
+        
         filter_prompt = f"""
-        Mám výstup z příkazové řádky (Winget Search). Původní dotaz: "{user_request}"
-        SUROVÁ DATA: '''{combined_output}'''
-        INSTRUKCE: Analyzuj data, ignoruj balast, extrahuj Název, ID, Verzi.
-        VÝSTUP (JSON pole): [{{ "name": "...", "id": "...", "version": "...", "website": "..." }}]
+        Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
+        Původní dotaz uživatele byl: "{user_request}"
+        
+        SUROVÁ DATA Z WINGET:
+        '''
+        {combined_output}
+        '''
+
+        INSTRUKCE:
+        1. Analyzuj surová data a najdi aplikace, které odpovídají záměru uživatele.
+        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace. (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu). Pokud se budou nacházet dvě verze určitého programu např. GIMP má z nějakého důvodu ve wingetu 2 verze, vždy vyber tu novější.
+        3. Extrahuj Název, ID a Verzi.
+        4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace (např. jsi ji sám navrhl v předchozím kroku), pokus se ID odhadnout (např. 'Mozilla.Firefox').
+        
+        VÝSTUPNÍ FORMÁT (čistý JSON pole):
+        [
+            {{ 
+                "name": "Název aplikace", 
+                "id": "Přesné.ID", 
+                "version": "verze (nebo 'Latest')", 
+                "website": "domena.com" 
+            }}
+        ]
         """
+
         try:
             response = model.generate_content(filter_prompt)
             raw_text = response.text
+            # Očištění o markdown bloky
             json_str = raw_text.replace("```json", "").replace("```", "").strip()
+            
+            # Extrakce JSONu pomocí regexu pro jistotu
             json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
-            data = json.loads(json_match.group(0)) if json_match else []
+            if json_match:
+                data = json.loads(json_match.group(0))
+            else:
+                data = []
+
+            # Validace verzí (stejné jako předtím)
             for item in data:
-                if not item.get('version') or item['version'] == "Latest": item['version'] = "Latest/Unknown"
+                if not item.get('version') or item['version'] == "Latest":
+                     # Zde bychom mohli volat get_real_version, ale pro rychlost to necháme být
+                     # nebo to voláme jen když je to nutné.
+                     item['version'] = "Latest/Unknown"
+
             self.controller.after(0, self.display_search_results, data)
+
         except Exception as e:
             print(f"Chyba při finálním parsování: {e}")
             self.controller.after(0, lambda: messagebox.showerror("Chyba AI", f"Chyba zpracování.\nDetail: {e}"))
