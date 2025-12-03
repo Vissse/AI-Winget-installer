@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, ttk, filedialog
 import google.generativeai as genai
 import json
 import os
@@ -20,7 +20,7 @@ import random
 API_KEY = "AIzaSyC04q0Magnd7hV6oC-mh6zvd4UUT6kxhsY" 
 OUTPUT_FILE = "install_apps.bat"
 
-# --- BAREVNÉ SCHÉMA (TODOIST STYLE - BLUE ACCENT) ---
+# --- BAREVNÉ SCHÉMA ---
 COLORS = {
     "bg_main": "#1e1e1e",
     "bg_sidebar": "#252525",
@@ -42,7 +42,58 @@ COLORS = {
 
 genai.configure(api_key=API_KEY)
 
-# --- POMOCNÉ TŘÍDY ---
+# --- POMOCNÉ TŘÍDY (ToolTip, Scrollbar, IconLoader, Splash) ---
+# (Zde zůstávají stejné jako v předchozím kódu, pro úsporu místa je neopakuji celé, 
+# ale ve finálním souboru musí být. Předpokládám, že je tam máš.)
+
+class ToolTip(object):
+    def __init__(self, widget, text='widget info'):
+        self.waittime = 400     
+        self.wraplength = 180   
+        self.widget = widget
+        self.text = text
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
+        self.widget.bind("<ButtonPress>", self.leave)
+        self.id = None
+        self.tw = None
+
+    def enter(self, event=None):
+        self.schedule()
+
+    def leave(self, event=None):
+        self.unschedule()
+        self.hidetip()
+
+    def schedule(self):
+        self.unschedule()
+        self.id = self.widget.after(self.waittime, self.showtip)
+
+    def unschedule(self):
+        id = self.id
+        self.id = None
+        if id:
+            self.widget.after_cancel(id)
+
+    def showtip(self, event=None):
+        x = y = 0
+        x, y, cx, cy = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 20
+        self.tw = tk.Toplevel(self.widget)
+        self.tw.wm_overrideredirect(True)
+        self.tw.wm_geometry("+%d+%d" % (x, y))
+        label = tk.Label(self.tw, text=self.text, justify='left',
+                       background="#2d2d2d", foreground="#ffffff",
+                       relief='solid', borderwidth=1,
+                       font=("Segoe UI", 8, "normal"), padx=5, pady=2)
+        label.pack(ipadx=1)
+
+    def hidetip(self):
+        tw = self.tw
+        self.tw= None
+        if tw:
+            tw.destroy()
 
 class ModernScrollbar(tk.Canvas):
     def __init__(self, parent, command=None, width=10, bg=COLORS['bg_main'], thumb_color="#424242"):
@@ -65,11 +116,9 @@ class ModernScrollbar(tk.Canvas):
         h = self.winfo_height()
         w = self.winfo_width()
         if h == 0: return
-        
         if self.bottom - self.top >= 1.0:
             self.coords(self.thumb, 0, 0, 0, 0)
             return
-
         y1 = h * self.top
         y2 = h * self.bottom
         if y2 - y1 < 20: y2 = y1 + 20 
@@ -153,21 +202,14 @@ class IconLoader:
             label.image = tk_img 
         except: pass
 
-# --- SPLASH SCREEN ---
 class SplashScreen(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Načítání...")
-        
-        w = 450
-        h = 280
-        ws = self.winfo_screenwidth()
-        hs = self.winfo_screenheight()
-        x = (ws/2) - (w/2)
-        y = (hs/2) - (h/2)
-        
+        w, h = 450, 280
+        ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = (ws/2) - (w/2), (hs/2) - (h/2)
         self.geometry('%dx%d+%d+%d' % (w, h, x, y))
-        # Splash screen necháme bez rámečku, to je standard
         self.overrideredirect(True) 
         self.configure(bg=COLORS['bg_main'])
         
@@ -175,7 +217,7 @@ class SplashScreen(tk.Toplevel):
         main_frame.pack(fill='both', expand=True)
 
         tk.Label(main_frame, text="AI Winget Installer", font=("Segoe UI", 22, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(pady=(50, 5))
-        tk.Label(main_frame, text="Alpha version 3.0", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
+        tk.Label(main_frame, text="Alpha version 4.0", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
 
         self.loading_label = tk.Label(main_frame, text="Inicializace...", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
         self.loading_label.pack(pady=(0, 5))
@@ -188,13 +230,7 @@ class SplashScreen(tk.Toplevel):
         self.progress.pack()
 
         self.progress_val = 0
-        self.loading_steps = [
-            "Načítání konfigurace...",
-            "Připojování k AI modelu...",
-            "Kontrola Winget repozitářů...",
-            "Inicializace grafického rozhraní...",
-            "Hotovo!"
-        ]
+        self.loading_steps = ["Načítání konfigurace...", "Připojování k AI...", "Kontrola Winget...", "GUI...", "Hotovo!"]
         self.step_index = 0
         self.after(100, self.animate)
 
@@ -203,7 +239,6 @@ class SplashScreen(tk.Toplevel):
             increment = random.randint(1, 4)
             self.progress_val += increment
             self.progress['value'] = self.progress_val
-            
             if self.progress_val > 20 and self.step_index == 0:
                 self.step_index = 1
                 self.loading_label.config(text=self.loading_steps[1])
@@ -213,7 +248,6 @@ class SplashScreen(tk.Toplevel):
             elif self.progress_val > 80 and self.step_index == 2:
                 self.step_index = 3
                 self.loading_label.config(text=self.loading_steps[3])
-            
             self.after(30, self.animate)
         else:
             self.loading_label.config(text=self.loading_steps[4])
@@ -221,10 +255,8 @@ class SplashScreen(tk.Toplevel):
 
     def close_splash(self):
         self.destroy()
-        # Pouze zobrazíme hlavní okno, žádné úpravy
         self.master.deiconify()
 
-# --- INSTALLATION DIALOG ---
 class InstallationDialog:
     def __init__(self, parent, install_list):
         self.top = tk.Toplevel(parent)
@@ -267,8 +299,11 @@ class InstallationDialog:
 
         self.close_btn = tk.Button(self.top, text="Zrušit", command=self.close_window, bg=COLORS['danger'], fg="white", font=("Segoe UI", 10), relief="flat", padx=25, pady=8, cursor="hand2")
         self.close_btn.pack(pady=15)
-        self.close_btn.bind("<Enter>", lambda e: self.on_hover(self.close_btn, COLORS['danger_hover']))
-        self.close_btn.bind("<Leave>", lambda e: self.on_leave(self.close_btn, COLORS['danger']))
+        
+        def on_enter(e): self.close_btn.config(bg=COLORS['danger_hover'])
+        def on_leave(e): self.close_btn.config(bg=COLORS['danger'])
+        self.close_btn.bind("<Enter>", on_enter)
+        self.close_btn.bind("<Leave>", on_leave)
 
         threading.Thread(target=self.run_installation_sequence, daemon=True).start()
         self.check_queue()
@@ -276,9 +311,6 @@ class InstallationDialog:
     def close_window(self):
         self.is_running = False
         self.top.destroy()
-
-    def on_hover(self, btn, color): btn.config(bg=color)
-    def on_leave(self, btn, color): btn.config(bg=color)
 
     def check_queue(self):
         while not self.msg_queue.empty():
@@ -383,8 +415,10 @@ class InstallationDialog:
         self.is_running = False
         self.progress_var.set(self.total_apps)
         self.close_btn.config(text="Zavřít", bg=COLORS['success'], command=self.top.destroy)
-        self.close_btn.bind("<Enter>", lambda e: self.on_hover(self.close_btn, COLORS['success_hover']))
-        self.close_btn.bind("<Leave>", lambda e: self.on_leave(self.close_btn, COLORS['success']))
+        def on_enter(e): self.close_btn.config(bg=COLORS['success_hover'])
+        def on_leave(e): self.close_btn.config(bg=COLORS['success'])
+        self.close_btn.bind("<Enter>", on_enter)
+        self.close_btn.bind("<Leave>", on_leave)
         if len(self.failed_apps) == 0:
             self.title_label.config(text="HOTOVO! Vše nainstalováno.", fg=COLORS['success'])
             self.status_label.config(text="Instalace dokončena bez chyb.")
@@ -393,8 +427,8 @@ class InstallationDialog:
             self.failed_apps_str = ", ".join(self.failed_apps)
             self.status_label.config(text=f"Nepodařilo se nainstalovat: {self.failed_apps_str}", fg=COLORS['danger'])
 
-# --- STRÁNKA INSTALLER ---
-class InstallerPage(tk.Frame):
+# --- NOVÁ STRÁNKA: UPDATER (SEZNAM INSTALOVANÝCH APLIKACÍ) ---
+class UpdaterPage(tk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent, bg=COLORS['bg_main'])
         self.controller = controller
@@ -403,91 +437,465 @@ class InstallerPage(tk.Frame):
             self.default_icon = ImageTk.PhotoImage(Image.new('RGB', (32, 32), color=COLORS['item_bg']))
         except: pass
 
-        self.queue_data = {} 
-        self.is_searching = False
+        self.upgradable_apps = [] # Seznam aplikací, které mají update
 
-        self.columnconfigure(0, weight=1, uniform="group1") 
-        self.columnconfigure(1, weight=1, uniform="group1") 
-        self.rowconfigure(0, weight=0) 
-        self.rowconfigure(1, weight=1) 
-
-        # --- 1. HEADER ---
+        # Header
         header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=15)
-        header_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-        tk.Label(header_frame, text="Installer", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
-    
+        header_frame.pack(fill='x')
+        tk.Label(header_frame, text="Správce aktualizací", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
 
-        # --- LEVÝ PANEL ---
-        left_panel = tk.Frame(self, bg=COLORS['bg_main'], padx=20, pady=10)
-        left_panel.grid(row=1, column=0, sticky="nsew")
+        # Controls
+        controls_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        controls_frame.pack(fill='x', pady=(0, 10))
+
+        self.stats_label = tk.Label(controls_frame, text="Načítám seznam aplikací...", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
+        self.stats_label.pack(side="left")
+
+        # Buttons
+        btn_frame = tk.Frame(controls_frame, bg=COLORS['bg_main'])
+        btn_frame.pack(side="right")
+
+        self.refresh_btn = tk.Button(btn_frame, text="🔄 Obnovit", command=self.start_scan, bg=COLORS['input_bg'], fg="white", relief="flat", padx=15, pady=5, cursor="hand2")
+        self.refresh_btn.pack(side="left", padx=5)
         
-        tk.Label(left_panel, text="Zadejte název programu", font=("Segoe UI", 14, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg'], anchor="w").pack(fill='x')
-        tk.Label(left_panel, text="(Nebo popište, co hledáte, např. 'úprava zvuku')", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(0, 10))
+        self.update_all_btn = tk.Button(btn_frame, text="🚀 Aktualizovat vše", command=self.update_all, bg=COLORS['success'], fg="white", relief="flat", padx=15, pady=5, cursor="hand2", state="disabled")
+        self.update_all_btn.pack(side="left", padx=5)
+
+        # Progress bar
+        self.progress = ttk.Progressbar(self, orient="horizontal", mode="indeterminate")
+        self.progress.pack(fill='x', padx=20, pady=(0, 10))
+
+        # List Area
+        self.list_container = tk.Frame(self, bg=COLORS['bg_sidebar'])
+        self.list_container.pack(fill='both', expand=True, padx=20, pady=(0, 20))
         
-        search_frame = tk.Frame(left_panel, bg=COLORS['bg_main'])
-        search_frame.pack(fill='x', pady=(0, 10))
+        self.list_canvas = tk.Canvas(self.list_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
+        self.list_scrollbar = ModernScrollbar(self.list_container, command=self.list_canvas.yview, bg=COLORS['bg_sidebar'])
+        self.list_scrollable = tk.Frame(self.list_canvas, bg=COLORS['bg_sidebar'])
         
-        search_border = tk.Frame(search_frame, bg=COLORS['input_bg'], bd=0, highlightthickness=0) 
-        search_border.pack(fill='x', ipady=2)
+        self.list_scrollable.bind("<Configure>", lambda e: self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all")))
+        self.list_canvas.create_window((0, 0), window=self.list_scrollable, anchor="nw", width=480)
+        self.list_canvas.configure(yscrollcommand=self.list_scrollbar.set)
+        self.list_canvas.bind("<Configure>", lambda e: self.list_canvas.itemconfig(self.list_canvas.find_all()[0], width=e.width))
+
+        self.list_canvas.pack(side="left", fill="both", expand=True)
+        self.list_scrollbar.pack(side="right", fill="y")
+        self._bind_mousewheel(self.list_container, self.list_canvas)
+
+        # Spustit skenování při startu
+        self.after(500, self.start_scan)
+
+    def _bind_mousewheel(self, widget, canvas):
+        def _on_mousewheel(event):
+            if canvas.bbox("all"):
+                scroll_height = canvas.bbox("all")[3]
+                visible_height = canvas.winfo_height()
+                if scroll_height <= visible_height: return 
+            if event.num == 5 or event.delta < 0: canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0: canvas.yview_scroll(-1, "units")
+            self.list_scrollbar.redraw()
+        bind_enter = lambda e: {canvas.bind_all("<MouseWheel>", _on_mousewheel), canvas.bind_all("<Button-4>", _on_mousewheel), canvas.bind_all("<Button-5>", _on_mousewheel)}
+        bind_leave = lambda e: {canvas.unbind_all("<MouseWheel>"), canvas.unbind_all("<Button-4>"), canvas.unbind_all("<Button-5>")}
+        widget.bind('<Enter>', bind_enter)
+        widget.bind('<Leave>', bind_leave)
+
+    def start_scan(self):
+        self.progress.start(10)
+        self.stats_label.config(text="Prohledávám nainstalované aplikace (může to chvíli trvat)...")
+        self.refresh_btn.config(state="disabled")
+        self.update_all_btn.config(state="disabled")
         
+        # Vyčistit list
+        for widget in self.list_scrollable.winfo_children(): widget.destroy()
+        
+        threading.Thread(target=self.scan_thread).start()
+
+    def scan_thread(self):
+        self.upgradable_apps = []
+        installed_apps = []
+        
+        try:
+            # Spustíme 'winget list', který vrátí vše (Name, Id, Version, Available, Source)
+            # Parametr --accept-source-agreements je nutný, aby se neptal
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            # Použijeme prostý výpis, protože JSON formát u 'list' je v některých verzích winget nestabilní
+            cmd = "winget list --accept-source-agreements"
+            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
+            
+            lines = result.stdout.splitlines()
+            
+            # Jednoduchý parser řádků
+            # Přeskočíme hlavičku (obvykle první 2 řádky)
+            start_index = 0
+            for i, line in enumerate(lines):
+                if line.startswith("Name") and "Id" in line and "Version" in line:
+                    start_index = i + 2 # Header + Separator
+                    break
+            
+            for line in lines[start_index:]:
+                # Rozdělíme podle více mezer
+                parts = re.split(r'\s{2,}', line.strip())
+                
+                if len(parts) >= 3:
+                    name = parts[0]
+                    app_id = parts[1]
+                    version = parts[2]
+                    available = ""
+                    
+                    # Pokud je k dispozici update, je ve 4. sloupci (index 3)
+                    # Ale pozor, někdy je tam "Source", musíme zkontrolovat, jestli to vypadá jako verze
+                    if len(parts) >= 4:
+                        potential_available = parts[3]
+                        # Jednoduchá heuristika: Verze začíná číslem
+                        if potential_available and potential_available[0].isdigit():
+                            available = potential_available
+                    
+                    app_data = {
+                        "name": name,
+                        "id": app_id,
+                        "version": version,
+                        "available": available
+                    }
+                    
+                    installed_apps.append(app_data)
+                    if available:
+                        self.upgradable_apps.append(app_data)
+
+            self.controller.after(0, self.display_apps, installed_apps)
+
+        except Exception as e:
+            print(f"Chyba při skenování: {e}")
+            self.controller.after(0, self.scan_error)
+
+    def scan_error(self):
+        self.progress.stop()
+        self.stats_label.config(text="Chyba při načítání aplikací.")
+        self.refresh_btn.config(state="normal")
+
+    def display_apps(self, apps):
+        self.progress.stop()
+        self.refresh_btn.config(state="normal")
+        
+        count_updatable = len(self.upgradable_apps)
+        self.stats_label.config(text=f"Nainstalováno: {len(apps)} aplikací | Dostupné aktualizace: {count_updatable}")
+        
+        if count_updatable > 0:
+            self.update_all_btn.config(state="normal", bg=COLORS['success'])
+        else:
+            self.update_all_btn.config(state="disabled", bg=COLORS['input_bg'])
+
+        # Seřadíme: Nejdříve ty s updatem, pak abecedně
+        apps.sort(key=lambda x: (0 if x['available'] else 1, x['name'].lower()))
+
+        for app in apps:
+            self.create_app_card(app)
+            
+        self.list_canvas.update_idletasks()
+        self.list_scrollbar.redraw()
+
+    def create_app_card(self, app):
+        card = tk.Frame(self.list_scrollable, bg=COLORS['item_bg'], pady=10, padx=10)
+        card.pack(fill='x', padx=(10,0), pady=5)
+
+        # Icon
+        icon_label = tk.Label(card, image=self.default_icon, bg=COLORS['item_bg'])
+        icon_label.pack(side="left", padx=(0, 15))
+        IconLoader.load_async(app, icon_label, self.controller)
+
+        # Text Info
+        text_frame = tk.Frame(card, bg=COLORS['item_bg'])
+        text_frame.pack(side="left", fill="both", expand=True)
+        
+        tk.Label(text_frame, text=app['name'], font=("Segoe UI", 11, "bold"), bg=COLORS['item_bg'], fg="white", anchor="w").pack(fill="x")
+        
+        meta_text = f"ID: {app['id']} | Verze: {app['version']}"
+        tk.Label(text_frame, text=meta_text, font=("Segoe UI", 9), bg=COLORS['item_bg'], fg=COLORS['sub_text'], anchor="w").pack(fill="x")
+
+        # Status / Action area
+        action_frame = tk.Frame(card, bg=COLORS['item_bg'])
+        action_frame.pack(side="right")
+
+        if app['available']:
+            # Update Available
+            tk.Label(action_frame, text=f"➔ {app['available']}", font=("Segoe UI", 9, "bold"), bg=COLORS['item_bg'], fg=COLORS['accent']).pack(side="left", padx=10)
+            
+            upd_btn = tk.Button(action_frame, text="Aktualizovat", font=("Segoe UI", 9, "bold"), 
+                                bg=COLORS['success'], fg="white", relief="flat", padx=10, pady=2, cursor="hand2",
+                                command=lambda: self.update_single(app))
+            upd_btn.pack(side="right")
+        else:
+            # Up to date
+            tk.Label(action_frame, text="✓ Aktuální", font=("Segoe UI", 9), bg=COLORS['item_bg'], fg="gray").pack(side="right", padx=10)
+
+    def update_single(self, app):
+        # Přidáme do fronty na instalaci (update je technicky reinstall novější verze)
+        if "installer" in self.controller.views:
+            installer = self.controller.views["installer"]
+            # Upravíme data pro installer queue
+            queue_item = {
+                "name": app['name'],
+                "id": app['id'],
+                "version": app['available'], # Chceme nainstalovat novou verzi
+                "website": "Unknown"
+            }
+            installer.add_item_to_queue(queue_item)
+            messagebox.showinfo("Updater", f"{app['name']} byla přidána do instalační fronty.")
+            # Volitelně přepnout: self.controller.switch_view("installer")
+
+    def update_all(self):
+        if not self.upgradable_apps: return
+        
+        if "installer" in self.controller.views:
+            installer = self.controller.views["installer"]
+            count = 0
+            for app in self.upgradable_apps:
+                queue_item = {
+                    "name": app['name'],
+                    "id": app['id'],
+                    "version": app['available'],
+                    "website": "Unknown"
+                }
+                installer.add_item_to_queue(queue_item)
+                count += 1
+            
+            messagebox.showinfo("Updater", f"{count} aplikací bylo přidáno do instalační fronty.\nPřejděte na záložku Installer pro spuštění.")
+            self.controller.switch_view("installer")
+
+# --- OSTATNÍ STRÁNKY (AllAppsPage, InstallerPage, Placeholders) ---
+# (Tyto třídy zůstávají stejné jako v předchozím kroku, zde je vložena AllAppsPage z minula pro úplnost)
+
+class AllAppsPage(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS['bg_main'])
+        self.controller = controller
+        try: self.default_icon = ImageTk.PhotoImage(Image.new('RGB', (32, 32), color=COLORS['item_bg']))
+        except: pass
+        header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=15)
+        header_frame.pack(fill='x')
+        tk.Label(header_frame, text="Katalog aplikací", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
+        search_container = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        search_container.pack(fill='x')
+        search_border = tk.Frame(search_container, bg=COLORS['input_bg'], bd=0) 
+        search_border.pack(fill='x', ipady=2, pady=(0, 10))
         self.input_entry = tk.Entry(search_border, font=("Segoe UI", 12), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
         self.input_entry.pack(side='left', fill='both', expand=True, padx=10)
         self.input_entry.bind('<Return>', lambda event: self.start_search())
+        self.search_btn = tk.Button(search_border, text="🔍", command=self.start_search, bg=COLORS['accent'], fg="white", relief="flat", padx=10, cursor="hand2")
+        self.search_btn.pack(side='right', fill='y', padx=2, pady=2)
+        filter_frame = tk.Frame(search_container, bg=COLORS['bg_main'])
+        filter_frame.pack(fill='x', pady=(0, 15))
+        tk.Label(filter_frame, text="Filtrovat:", font=("Segoe UI", 9, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(side="left", padx=(0, 10))
+        self.create_filter_chip(filter_frame, "🌐 Internet", "Web Browsers")
+        self.create_filter_chip(filter_frame, "🎵 Média", "Video Audio Player")
+        self.create_filter_chip(filter_frame, "🛠️ Vývoj", "Development Tools")
+        self.create_filter_chip(filter_frame, "🔧 Nástroje", "Utilities System")
+        self.create_filter_chip(filter_frame, "🎮 Hry", "Gaming Launcher")
+        self.progress = ttk.Progressbar(self, orient="horizontal", mode="indeterminate")
+        self.results_container = tk.Frame(self, bg=COLORS['bg_sidebar'])
+        self.results_container.pack(fill='both', expand=True, padx=20, pady=(0, 20))
+        self.results_canvas = tk.Canvas(self.results_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
+        self.results_scrollbar = ModernScrollbar(self.results_container, command=self.results_canvas.yview, bg=COLORS['bg_sidebar'])
+        self.results_scrollable = tk.Frame(self.results_canvas, bg=COLORS['bg_sidebar'])
+        self.results_scrollable.bind("<Configure>", lambda e: self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all")))
+        self.results_canvas.create_window((0, 0), window=self.results_scrollable, anchor="nw", width=480)
+        self.results_canvas.configure(yscrollcommand=self.results_scrollbar.set)
+        self.results_canvas.bind("<Configure>", lambda e: self.results_canvas.itemconfig(self.results_canvas.find_all()[0], width=e.width))
+        self.results_canvas.pack(side="left", fill="both", expand=True)
+        self.results_scrollbar.pack(side="right", fill="y")
+        self._bind_mousewheel(self.results_container, self.results_canvas)
+        self.after(500, self.load_default_catalog)
 
+    def load_default_catalog(self):
+        self.progress.pack(fill='x', padx=20, pady=(0, 10))
+        self.progress.start(10)
+        threading.Thread(target=self.generate_default_apps_thread).start()
+
+    def generate_default_apps_thread(self):
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        prompt = """Vygeneruj JSON seznam 30 nejpopulárnějších a nejpoužívanějších aplikací pro Windows, které jsou dostupné na Winget. Zahrň kategorie jako Prohlížeče, Média, Nástroje, Komunikace. VÝSTUPNÍ FORMÁT (čistý JSON pole): [{ "name": "Název aplikace", "id": "Přesné.Winget.ID", "version": "Latest", "website": "url_webu" }]"""
+        try:
+            response = model.generate_content(prompt)
+            raw_text = response.text
+            json_str = raw_text.replace("```json", "").replace("```", "").strip()
+            match = re.search(r'\[.*\]', json_str, re.DOTALL)
+            data = json.loads(match.group(0)) if match else []
+            self.controller.after(0, self.display_results, data)
+        except Exception as e:
+            print(f"Chyba při načítání katalogu: {e}")
+            self.controller.after(0, self.stop_loading)
+
+    def create_filter_chip(self, parent, text, query):
+        btn = tk.Button(parent, text=text, font=("Segoe UI", 9), bg=COLORS['item_bg'], fg=COLORS['fg'], relief="flat", padx=10, pady=2, cursor="hand2", command=lambda: self.run_category_search(query))
+        btn.pack(side="left", padx=3)
+        def on_enter(e): btn.config(bg=COLORS['item_hover'])
+        def on_leave(e): btn.config(bg=COLORS['item_bg'])
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
+
+    def _bind_mousewheel(self, widget, canvas):
+        def _on_mousewheel(event):
+            if canvas.bbox("all"):
+                scroll_height = canvas.bbox("all")[3]
+                visible_height = canvas.winfo_height()
+                if scroll_height <= visible_height: return 
+            if event.num == 5 or event.delta < 0: canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0: canvas.yview_scroll(-1, "units")
+            self.results_scrollbar.redraw()
+        bind_enter = lambda e: {canvas.bind_all("<MouseWheel>", _on_mousewheel), canvas.bind_all("<Button-4>", _on_mousewheel), canvas.bind_all("<Button-5>", _on_mousewheel)}
+        bind_leave = lambda e: {canvas.unbind_all("<MouseWheel>"), canvas.unbind_all("<Button-4>"), canvas.unbind_all("<Button-5>")}
+        widget.bind('<Enter>', bind_enter)
+        widget.bind('<Leave>', bind_leave)
+
+    def start_search(self):
+        query = self.input_entry.get()
+        if not query: return
+        self.run_category_search(query)
+
+    def run_category_search(self, query):
+        self.progress.pack(fill='x', padx=20, pady=(0, 10))
+        self.progress.start(10)
+        for widget in self.results_scrollable.winfo_children(): widget.destroy()
+        threading.Thread(target=self.search_thread, args=(query,)).start()
+
+    def search_thread(self, query):
+        try:
+            cmd = f'winget search "{query}" --source winget --accept-source-agreements -n 15'
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            prompt = f"""Parsuj tento výstup z winget search na JSON. Ignoruj balast a ID začínající na "msstore". VÝSTUP: '''{result.stdout}''' JSON FORMAT: [{{ "name": "...", "id": "...", "version": "...", "website": "..." }}]"""
+            response = model.generate_content(prompt)
+            json_str = response.text.replace("```json", "").replace("```", "").strip()
+            match = re.search(r'\[.*\]', json_str, re.DOTALL)
+            data = json.loads(match.group(0)) if match else []
+            for item in data:
+                 if not item.get('version') or item['version'] == "Latest": item['version'] = "Latest/Unknown"
+            self.controller.after(0, self.display_results, data)
+        except Exception as e:
+            print(e)
+            self.controller.after(0, self.stop_loading)
+
+    def stop_loading(self):
+        self.progress.stop()
+        self.progress.pack_forget()
+
+    def display_results(self, items):
+        self.stop_loading()
+        for widget in self.results_scrollable.winfo_children(): widget.destroy()
+        if not items:
+            tk.Label(self.results_scrollable, text="Nic nenalezeno.", bg=COLORS['bg_sidebar'], fg="gray").pack(pady=20)
+            return
+        for item in items: self.create_item(item)
+        self.results_canvas.update_idletasks()
+        self.results_scrollbar.redraw()
+
+    def create_item(self, item_data):
+        card = tk.Frame(self.results_scrollable, bg=COLORS['item_bg'], pady=10, padx=10)
+        card.pack(fill='x', padx=(10,0), pady=5)
+        icon_label = tk.Label(card, image=self.default_icon, bg=COLORS['item_bg'])
+        icon_label.pack(side="left", padx=(0, 15))
+        IconLoader.load_async(item_data, icon_label, self.controller)
+        text_frame = tk.Frame(card, bg=COLORS['item_bg'])
+        text_frame.pack(side="left", fill="both", expand=True)
+        tk.Label(text_frame, text=item_data.get("name"), font=("Segoe UI", 11, "bold"), bg=COLORS['item_bg'], fg="white", anchor="w").pack(fill="x")
+        tk.Label(text_frame, text=f"ID: {item_data.get('id')}", font=("Segoe UI", 9), bg=COLORS['item_bg'], fg=COLORS['sub_text'], anchor="w").pack(fill="x")
+        action_symbol = tk.Label(card, text="＋", font=("Arial", 18), bg=COLORS['item_bg'], fg=COLORS['accent'], cursor="hand2", padx=10)
+        action_symbol.pack(side="right")
+        action_symbol.bind("<Button-1>", lambda e, i=item_data: self.add_to_main_queue(i))
+        def on_enter_sym(e): action_symbol.config(bg=COLORS['accent'], fg="white")
+        def on_leave_sym(e): action_symbol.config(bg=COLORS['item_bg'], fg=COLORS['accent'])
+        action_symbol.bind("<Enter>", on_enter_sym)
+        action_symbol.bind("<Leave>", on_leave_sym)
+        widgets = [card, text_frame, icon_label] + text_frame.winfo_children()
+        def on_enter_card(e):
+            for w in widgets: w.config(bg=COLORS['item_hover'])
+            if e.widget != action_symbol: action_symbol.config(bg=COLORS['item_hover'])
+        def on_leave_card(e):
+            for w in widgets: w.config(bg=COLORS['item_bg'])
+            if e.widget != action_symbol: action_symbol.config(bg=COLORS['item_bg'])
+        card.bind("<Enter>", on_enter_card)
+        card.bind("<Leave>", on_leave_card)
+
+    def add_to_main_queue(self, item):
+        if "installer" in self.controller.views:
+            installer_page = self.controller.views["installer"]
+            installer_page.add_item_to_queue(item)
+            messagebox.showinfo("Přidáno", f"{item['name']} byla přidána do fronty.")
+        else: messagebox.showerror("Chyba", "Instalační stránka není dostupná.")
+
+class InstallerPage(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS['bg_main'])
+        self.controller = controller
+        try: self.default_icon = ImageTk.PhotoImage(Image.new('RGB', (32, 32), color=COLORS['item_bg']))
+        except: pass
+        self.queue_data = {} 
+        self.is_searching = False
+        self.columnconfigure(0, weight=1, uniform="group1") 
+        self.columnconfigure(1, weight=1, uniform="group1") 
+        self.rowconfigure(0, weight=0) 
+        self.rowconfigure(1, weight=0) 
+        self.rowconfigure(2, weight=1) 
+        header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=15)
+        header_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        tk.Label(header_frame, text="Installer", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
+        left_controls = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        left_controls.grid(row=1, column=0, sticky="nsew")
+        tk.Label(left_controls, text="Zadejte název programu", font=("Segoe UI", 14, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg'], anchor="w").pack(fill='x')
+        tk.Label(left_controls, text="(Nebo popište, co hledáte, např. 'úprava zvuku')", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(0, 10))
+        search_frame = tk.Frame(left_controls, bg=COLORS['bg_main'])
+        search_frame.pack(fill='x', pady=(0, 10))
+        search_border = tk.Frame(search_frame, bg=COLORS['input_bg'], bd=0, highlightthickness=0) 
+        search_border.pack(fill='x', ipady=2)
+        self.input_entry = tk.Entry(search_border, font=("Segoe UI", 12), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
+        self.input_entry.pack(side='left', fill='both', expand=True, padx=10)
+        self.input_entry.bind('<Return>', lambda event: self.start_search())
         self.search_btn = self.create_animated_btn(search_border, "Hledat", self.start_search, COLORS['accent'], COLORS['accent_hover'])
         self.search_btn.pack(side='right', fill='y', padx=2, pady=2)
-
         style = ttk.Style()
         style.theme_use('default')
         style.configure("Horizontal.TProgressbar", background=COLORS['accent'], troughcolor=COLORS['bg_main'], borderwidth=0, thickness=2)
         self.progress = ttk.Progressbar(search_frame, orient="horizontal", mode="indeterminate", style="Horizontal.TProgressbar")
-
-        tk.Label(left_panel, text="Výsledky hledání:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(10, 5))
-        
-        self.found_container = tk.Frame(left_panel, bg=COLORS['bg_sidebar'])
+        tk.Label(left_controls, text="Výsledky hledání:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(10, 5), side="bottom")
+        right_controls = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        right_controls.grid(row=1, column=1, sticky="sew") 
+        queue_header_row = tk.Frame(right_controls, bg=COLORS['bg_main'])
+        queue_header_row.pack(fill='x', pady=(10, 5), side="bottom")
+        tk.Label(queue_header_row, text="Instalační fronta:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(side="left")
+        actions_frame = tk.Frame(queue_header_row, bg=COLORS['bg_main'])
+        actions_frame.pack(side="right")
+        self.create_header_btn(actions_frame, "📂", self.import_queue, "Importovat seznam", COLORS['input_bg'], COLORS['item_hover'])
+        self.create_header_btn(actions_frame, "🗑️", self.clear_queue, "Vymazat frontu", COLORS['danger'], COLORS['danger_hover'])
+        self.create_header_btn(actions_frame, "💾", self.save_only, "Uložit .bat soubor", COLORS['input_bg'], COLORS['item_hover'])
+        self.create_header_btn(actions_frame, "🚀", self.install_now, "Instalovat vše", COLORS['success'], COLORS['success_hover'])
+        left_list_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        left_list_frame.grid(row=2, column=0, sticky="nsew")
+        self.found_container = tk.Frame(left_list_frame, bg=COLORS['bg_sidebar'])
         self.found_container.pack(fill='both', expand=True, pady=(0, 20))
-        
         self.found_canvas = tk.Canvas(self.found_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
         self.found_scrollbar = ModernScrollbar(self.found_container, command=self.found_canvas.yview, bg=COLORS['bg_sidebar'])
         self.found_scrollable = tk.Frame(self.found_canvas, bg=COLORS['bg_sidebar'])
-        
         self.found_scrollable.bind("<Configure>", self.on_frame_configure)
         self.found_canvas.create_window((0, 0), window=self.found_scrollable, anchor="nw", width=480)
         self.found_canvas.configure(yscrollcommand=self.found_scrollbar.set)
         self.found_canvas.bind("<Configure>", lambda e: self.found_canvas.itemconfig(self.found_canvas.find_all()[0], width=e.width))
-
         self.found_canvas.pack(side="left", fill="both", expand=True)
         self.found_scrollbar.pack(side="right", fill="y")
         self._bind_mousewheel(self.found_container, self.found_canvas)
-
-
-        # --- PRAVÝ PANEL ---
-        right_panel = tk.Frame(self, bg=COLORS['bg_main'], padx=20, pady=10)
-        right_panel.grid(row=1, column=1, sticky="nsew")
-
-        queue_header = tk.Frame(right_panel, bg=COLORS['bg_main'])
-        queue_header.pack(fill='x', pady=(0, 10))
-        tk.Label(queue_header, text="Instalační fronta:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(side="left")
-
-        right_footer = tk.Frame(right_panel, bg=COLORS['bg_main'], pady=20)
-        right_footer.pack(side="bottom", fill='x')
-
-        self.create_animated_btn(right_footer, "Vymazat frontu", self.clear_queue, COLORS['danger'], COLORS['danger_hover']).pack(side="left")
-        self.create_animated_btn(right_footer, "Uložit inst. soubor", self.save_only, COLORS['input_bg'], COLORS['item_hover']).pack(side="left", padx=10)
-        self.create_animated_btn(right_footer, "INSTALOVAT VŠE", self.install_now, COLORS['success'], COLORS['success_hover']).pack(side="right", fill='x', expand=True, padx=(10, 0))
-
-        self.queue_container = tk.Frame(right_panel, bg=COLORS['bg_sidebar'])
-        self.queue_container.pack(fill='both', expand=True)
-
+        right_list_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        right_list_frame.grid(row=2, column=1, sticky="nsew")
+        self.queue_container = tk.Frame(right_list_frame, bg=COLORS['bg_sidebar'])
+        self.queue_container.pack(fill='both', expand=True, pady=(0, 20))
         self.queue_canvas = tk.Canvas(self.queue_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
         self.queue_scrollbar = ModernScrollbar(self.queue_container, command=self.queue_canvas.yview, bg=COLORS['bg_sidebar'])
         self.queue_scrollable = tk.Frame(self.queue_canvas, bg=COLORS['bg_sidebar'])
-        
         self.queue_scrollable.bind("<Configure>", lambda e: self.queue_canvas.configure(scrollregion=self.queue_canvas.bbox("all")))
         self.queue_canvas.create_window((0, 0), window=self.queue_scrollable, anchor="nw", width=480)
         self.queue_canvas.configure(yscrollcommand=self.queue_scrollbar.set)
         self.queue_canvas.bind("<Configure>", lambda e: self.queue_canvas.itemconfig(self.queue_canvas.find_all()[0], width=e.width))
-
         self.queue_canvas.pack(side="left", fill="both", expand=True)
         self.queue_scrollbar.pack(side="right", fill="y")
         self._bind_mousewheel(self.queue_container, self.queue_canvas)
@@ -505,18 +913,33 @@ class InstallerPage(tk.Frame):
         btn.bind("<Leave>", on_leave)
         return btn
 
+    def create_header_btn(self, parent, text, command, tooltip_text, bg_color, hover_color):
+        btn = tk.Button(parent, text=text, command=command, bg=bg_color, fg="white", font=("Segoe UI Emoji", 12), relief="flat", width=3, cursor="hand2", borderwidth=0)
+        btn.pack(side="left", padx=2)
+        def on_enter(e):
+            if btn['state'] != 'disabled': btn.config(bg=hover_color)
+        def on_leave(e):
+            if btn['state'] != 'disabled': btn.config(bg=bg_color)
+        btn.bind("<Enter>", on_enter)
+        btn.bind("<Leave>", on_leave)
+        ToolTip(btn, tooltip_text)
+        return btn
+
+    def import_queue(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("Batch files", "*.bat"), ("All files", "*.*")])
+        if file_path:
+             messagebox.showinfo("Import", f"Vybrán soubor: {file_path}\n(Funkce importu zatím není plně implementována)")
+
     def _bind_mousewheel(self, widget, canvas):
         def _on_mousewheel(event):
             if canvas.bbox("all"):
                 scroll_height = canvas.bbox("all")[3]
                 visible_height = canvas.winfo_height()
                 if scroll_height <= visible_height: return 
-            
             if event.num == 5 or event.delta < 0: canvas.yview_scroll(1, "units")
             elif event.num == 4 or event.delta > 0: canvas.yview_scroll(-1, "units")
             self.found_scrollbar.redraw()
             self.queue_scrollbar.redraw()
-        
         bind_enter = lambda e: {canvas.bind_all("<MouseWheel>", _on_mousewheel), canvas.bind_all("<Button-4>", _on_mousewheel), canvas.bind_all("<Button-5>", _on_mousewheel)}
         bind_leave = lambda e: {canvas.unbind_all("<MouseWheel>"), canvas.unbind_all("<Button-4>"), canvas.unbind_all("<Button-5>")}
         widget.bind('<Enter>', bind_enter)
@@ -537,130 +960,61 @@ class InstallerPage(tk.Frame):
 
     def get_winget_ids_thread(self, user_request):
         model = genai.GenerativeModel('gemini-2.5-flash') 
-        
         print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
-        
-        # 1. KROK: Zjištění záměru (Intent Recognition)
-        # Ptáme se AI: Je to název, nebo kategorie?
         intent_prompt = f"""
         Jsi expert na Windows software a Winget repozitář.
         Uživatel zadal: "{user_request}"
-
         Tvým úkolem je rozhodnout, jak tento dotaz hledat ve Winget.
-        
-        SCÉNÁŘ A (Konkrétní aplikace):
-        Pokud uživatel myslí konkrétní program (i s překlepem, např. "discrd", "chrom", "vlc"),
-        vráť POUZE opravený název.
-        
-        SCÉNÁŘ B (Obecný popis/Kategorie):
-        Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
-        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
-        
-        Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
-        QUERIES: název1;název2;název3
+        SCÉNÁŘ A (Konkrétní aplikace): Pokud uživatel myslí konkrétní program (i s překlepem), vráť POUZE opravený název.
+        SCÉNÁŘ B (Obecný popis/Kategorie): Pokud uživatel hledá typ programu, vyber několik NEJLEPŠÍCH aplikací.
+        Odpověz POUZE v tomto formátu: QUERIES: název1;název2;název3
         """
-
         search_terms = []
         try:
             intent_response = model.generate_content(intent_prompt)
             raw_intent = intent_response.text.strip()
-            
-            # Parsování odpovědi (očekáváme "QUERIES: app1;app2...")
             if "QUERIES:" in raw_intent:
                 clean_line = raw_intent.replace("QUERIES:", "").strip()
-                # Rozdělíme středníkem a vyčistíme
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
-                # Fallback, kdyby AI neodpověděla správně
                 search_terms = [user_request]
-                
             print(f"AI navrhlo hledat tyto výrazy: {search_terms}")
-
         except Exception as e:
             print(f"Chyba při zjišťování záměru: {e}")
             search_terms = [user_request]
 
-        # 2. KROK: Hromadné hledání ve Winget
-        # Spustíme hledání pro každý výraz, který AI navrhlo
         combined_output = ""
-        
         self.progress['maximum'] = len(search_terms) * 100
         current_prog = 0
         
         for term in search_terms:
             try:
-                # Omezíme výsledky (-n 3) aby toho nebylo moc pro další AI analýzu
                 cmd = f'winget search "{term}" --source winget --accept-source-agreements -n 3'
-                
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                
                 print(f"Spouštím Winget pro: {term}")
                 result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
-                
-                # Přidáme výstup do jednoho velkého textu
                 combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n"
                 combined_output += result.stdout
-                
             except Exception as e:
                 print(f"Winget search selhal pro {term}: {e}")
-            
-            # Aktualizace progress baru (jen vizuálně)
             current_prog += 100
-            # V threadu nemůžeme přímo měnit GUI bezpečně, ale u jednoduchých proměnných to v Tkinteru často projde. 
-            # Správnější by bylo frontování, ale pro jednoduchost necháme běžet.
 
-        # 3. KROK: Finální filtrace a formátování na JSON
-        # Teď máme "špinavý" výstup z několika hledání, AI z toho musí vytáhnout to důležité.
-        
         filter_prompt = f"""
-        Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
-        Původní dotaz uživatele byl: "{user_request}"
-        
-        SUROVÁ DATA Z WINGET:
-        '''
-        {combined_output}
-        '''
-
-        INSTRUKCE:
-        1. Analyzuj surová data a najdi aplikace, které odpovídají záměru uživatele.
-        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace. (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu). Pokud se budou nacházet dvě verze určitého programu např. GIMP má z nějakého důvodu ve wingetu 2 verze, vždy vyber tu novější.
-        3. Extrahuj Název, ID a Verzi.
-        4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace (např. jsi ji sám navrhl v předchozím kroku), pokus se ID odhadnout (např. 'Mozilla.Firefox').
-        
-        VÝSTUPNÍ FORMÁT (čistý JSON pole):
-        [
-            {{ 
-                "name": "Název aplikace", 
-                "id": "Přesné.ID", 
-                "version": "verze (nebo 'Latest')", 
-                "website": "domena.com" 
-            }}
-        ]
+        Mám výstup z příkazové řádky (Winget Search). Původní dotaz: "{user_request}"
+        SUROVÁ DATA: '''{combined_output}'''
+        INSTRUKCE: Analyzuj data, ignoruj balast, extrahuj Název, ID, Verzi.
+        VÝSTUP (JSON pole): [{{ "name": "...", "id": "...", "version": "...", "website": "..." }}]
         """
-
         try:
             response = model.generate_content(filter_prompt)
             raw_text = response.text
-            # Očištění o markdown bloky
             json_str = raw_text.replace("```json", "").replace("```", "").strip()
-            
-            # Extrakce JSONu pomocí regexu pro jistotu
             json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-            else:
-                data = []
-
-            # Validace verzí (stejné jako předtím)
+            data = json.loads(json_match.group(0)) if json_match else []
             for item in data:
-                if not item.get('version') or item['version'] == "Latest":
-                     # Zde bychom mohli volat get_real_version, ale pro rychlost to necháme být
-                     # nebo to voláme jen když je to nutné.
-                     item['version'] = "Latest/Unknown"
-
+                if not item.get('version') or item['version'] == "Latest": item['version'] = "Latest/Unknown"
             self.controller.after(0, self.display_search_results, data)
-
         except Exception as e:
             print(f"Chyba při finálním parsování: {e}")
             self.controller.after(0, lambda: messagebox.showerror("Chyba AI", f"Chyba zpracování.\nDetail: {e}"))
@@ -678,8 +1032,7 @@ class InstallerPage(tk.Frame):
         if not items:
             tk.Label(self.found_scrollable, text="Nic nenalezeno.", bg=COLORS['bg_sidebar'], fg="gray").pack(pady=20)
             return
-        for item in items:
-            self.create_list_item(self.found_scrollable, item, is_result_mode=True)
+        for item in items: self.create_list_item(self.found_scrollable, item, is_result_mode=True)
         self.found_canvas.update_idletasks()
         self.found_scrollbar.redraw()
 
@@ -687,22 +1040,17 @@ class InstallerPage(tk.Frame):
         name = item_data.get("name")
         app_id = item_data.get("id")
         version = item_data.get("version")
-        
         card = tk.Frame(parent_scrollable, bg=COLORS['item_bg'], pady=10, padx=10)
         card.pack(fill='x', padx=(10,0), pady=5)
-
         icon_label = tk.Label(card, image=self.default_icon, bg=COLORS['item_bg'])
         icon_label.pack(side="left", padx=(0, 15))
         IconLoader.load_async(item_data, icon_label, self.controller)
-
         text_frame = tk.Frame(card, bg=COLORS['item_bg'])
         text_frame.pack(side="left", fill="both", expand=True)
         tk.Label(text_frame, text=name, font=("Segoe UI", 11, "bold"), bg=COLORS['item_bg'], fg="white", anchor="w").pack(fill="x")
         tk.Label(text_frame, text=f"ID: {app_id} | v{version}", font=("Segoe UI", 9), bg=COLORS['item_bg'], fg=COLORS['sub_text'], anchor="w").pack(fill="x")
-
         action_symbol = tk.Label(card, font=("Arial", 18), bg=COLORS['item_bg'], cursor="hand2", padx=10)
         action_symbol.pack(side="right")
-
         if is_result_mode:
             action_symbol.config(text="＋", fg=COLORS['accent'])
             action_symbol.bind("<Button-1>", lambda e, i=item_data: self.add_item_to_queue(i))
@@ -711,7 +1059,6 @@ class InstallerPage(tk.Frame):
             action_symbol.config(text="✕", fg=COLORS['danger'])
             action_symbol.bind("<Button-1>", lambda e, aid=app_id: self.remove_from_queue(aid))
             self._bind_symbol_hover(action_symbol, COLORS['danger'], COLORS['fg'])
-
         self._bind_card_hover(card, text_frame, icon_label, action_symbol)
 
     def _bind_symbol_hover(self, widget, hover_bg, hover_fg):
@@ -762,7 +1109,6 @@ class InstallerPage(tk.Frame):
         if not self.queue_data:
             messagebox.showwarning("Pozor", "Seznam je prázdný.")
             return False
-            
         try:
             with open(OUTPUT_FILE, "w", encoding="utf-8") as f: 
                 f.write("@echo off\nchcp 65001 > nul\necho Zahajuji instalaci...\n\n")
@@ -786,32 +1132,23 @@ class InstallerPage(tk.Frame):
             return
         InstallationDialog(self.controller, list(self.queue_data.values()))
 
-
-# --- PLACEHOLDER PRO OSTATNÍ ZÁLOŽKY ---
 class PlaceholderPage(tk.Frame):
     def __init__(self, parent, title, icon_emoji="✨"):
         super().__init__(parent, bg=COLORS['bg_main'])
-        
         center_frame = tk.Frame(self, bg=COLORS['bg_main'])
         center_frame.place(relx=0.5, rely=0.5, anchor="center")
-
         tk.Label(center_frame, text=icon_emoji, font=("Segoe UI Emoji", 48), bg=COLORS['bg_main']).pack(pady=(0, 20))
         tk.Label(center_frame, text=f"Vítejte v {title}", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack()
         tk.Label(center_frame, text="Vyberte akci z menu vlevo", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(pady=(5, 20))
 
-
-# --- HLAVNÍ APLIKACE (BEZ ÚPRAV PANELU) ---
 class MainApplication(tk.Tk):
     def __init__(self):
         super().__init__()
-        # --- OPRAVA PROBLIKNUTÍ ---
         self.withdraw() 
-        
         self.title("AI Winget Installer")
         
-        # 1. CENTROVÁNÍ OKNA
-        w = 1100
-        h = 700
+        w = 1175
+        h = 750
         ws = self.winfo_screenwidth()
         hs = self.winfo_screenheight()
         x = int((ws/2) - (w/2))
@@ -820,7 +1157,7 @@ class MainApplication(tk.Tk):
 
         self.configure(bg=COLORS['bg_main'])
 
-        # 2. VYNUCENÍ BARVY LIŠTY
+        # VYNUCENÍ BARVY LIŠTY
         try:
             import ctypes
             from ctypes import windll, byref, c_int
@@ -844,7 +1181,7 @@ class MainApplication(tk.Tk):
         except Exception as e:
             print(f"Nepodařilo se obarvit lištu: {e}")
 
-        # --- GRID ROZLOŽENÍ ---
+        # GRID ROZLOŽENÍ
         container = tk.Frame(self, bg=COLORS['bg_main'])
         container.pack(fill='both', expand=True)
         container.grid_columnconfigure(0, weight=0, minsize=250) 
@@ -856,23 +1193,21 @@ class MainApplication(tk.Tk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        # --- NOVÉ: VERZE DOLE V SIDEBARU ---
-        # Použijeme pack(side="bottom"), aby to bylo vždy na dně panelu
-        ver_label = tk.Label(self.sidebar, text="Alpha version 3.0", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
+        ver_label = tk.Label(self.sidebar, text="Alpha version 4.0", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
         ver_label.pack(side="bottom", pady=20)
 
-        # Profil
         profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15)
-        profile_frame.pack(fill='x', side="top") # side="top" je default, ale pro přehlednost
+        profile_frame.pack(fill='x', side="top")
         cv = tk.Canvas(profile_frame, width=32, height=32, bg=COLORS['bg_sidebar'], highlightthickness=0)
         cv.pack(side="left")
         cv.create_oval(2, 2, 30, 30, fill="#555", outline="")
         cv.create_text(16, 16, text="U", fill="white", font=("Segoe UI", 12, "bold"))
         tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['fg']).pack(side="left", padx=10)
         
-        # Menu tlačítka
         self.menu_buttons = {}
-        tk.Button(self.sidebar, text="⊕  Quick Install", bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 20))
+        tk.Button(self.sidebar, text="☰  Všechny aplikace", command=lambda: self.switch_view("all_apps"),
+                  bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
+                  relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 20))
 
         self.create_menu_item("installer", "📦  Installer")
         self.create_menu_item("updater", "🔄  Updater")
@@ -890,13 +1225,13 @@ class MainApplication(tk.Tk):
         
         self.views = {}
         self.views["installer"] = InstallerPage(self.content_area, self)
-        self.views["updater"] = PlaceholderPage(self.content_area, "Updater View", "🔄")
+        self.views["all_apps"] = AllAppsPage(self.content_area, self)
+        self.views["updater"] = UpdaterPage(self.content_area, self) # ZDE JE ZMĚNA
         self.views["upcoming"] = PlaceholderPage(self.content_area, "Upcoming Updates", "📅")
 
         self.current_view = None
         self.switch_view("installer")
         
-        # Spustíme Splash Screen
         SplashScreen(self)
 
     def create_menu_item(self, view_name, text):
