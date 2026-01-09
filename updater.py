@@ -6,12 +6,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from packaging import version
 import threading
-import time
+import shutil
 
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
-REPO_NAME = "AI-Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV (podle screenshotů to není AI-Winget-Installer)
-CURRENT_VERSION = "4.3.12"      # Zvedněte verzi, až to budete vydávat
+REPO_NAME = "Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV
+CURRENT_VERSION = "4.3.13"      # Zvedněte verzi
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -20,6 +20,7 @@ class UpdateProgressDialog(tk.Toplevel):
         self.geometry("400x150")
         self.resizable(False, False)
         
+        # Centr na obrazovku
         try:
             ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
             x, y = (ws/2) - (200), (hs/2) - (75)
@@ -51,7 +52,7 @@ class UpdateProgressDialog(tk.Toplevel):
     def download_thread(self):
         new_exe_name = "new_version.exe"
         try:
-            # 1. Úklid před startem (Smazat starý, pokud existuje)
+            # 1. Úklid
             if os.path.exists(new_exe_name):
                 try: os.remove(new_exe_name)
                 except: pass
@@ -70,20 +71,17 @@ class UpdateProgressDialog(tk.Toplevel):
                             percent = (downloaded / self.total_size) * 100
                             self.after(0, lambda p=percent: self.update_ui(p))
             
-            # 3. Kontrola integrity
+            # 3. Kontrola velikosti (Ochrana proti corrupt souborům)
             if self.total_size > 0 and downloaded < self.total_size:
-                raise Exception("Stažený soubor je nekompletní (přerušeno).")
+                raise Exception("Stažený soubor je menší než očekáváno (chyba sítě).")
 
-            # Vše OK -> Spustit instalaci
             self.after(0, self.on_success)
             self.after(0, self.destroy)
 
         except Exception as e:
-            # Chyba -> Smazat poškozený soubor
             if os.path.exists(new_exe_name):
                 try: os.remove(new_exe_name)
                 except: pass
-                
             self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
             self.after(0, self.on_fail)
             self.after(0, self.destroy)
@@ -117,9 +115,7 @@ class GitHubUpdater:
                     if not silent: self.parent.after(0, lambda: messagebox.showinfo("Aktuální", "Máte nejnovější verzi."))
             else:
                 if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", f"GitHub API: {response.status_code}"))
-                
         except Exception as e:
-            print(f"Update error: {e}")
             if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", f"{e}"))
 
         if on_continue:
@@ -135,7 +131,6 @@ class GitHubUpdater:
 
     def _prompt_update(self, new_version, url, size, on_continue):
         msg = f"Je dostupná nová verze {new_version}!\n\nChcete ji stáhnout a nainstalovat?\n(Aplikace se restartuje)"
-        
         if messagebox.askyesno("Aktualizace", msg, parent=self.parent):
             UpdateProgressDialog(self.parent, size, url, self._perform_restart, on_continue)
         else:
@@ -146,29 +141,35 @@ class GitHubUpdater:
             current_exe = os.path.basename(sys.executable)
             if not current_exe.endswith(".exe"): current_exe = "AI_Winget_Installer.exe"
 
-            # BAT SKRIPT S POKROČILOU SMYČKOU (Čeká, dokud se soubor neuvolní)
+            # BAT skript:
+            # 1. Počká 2 sekundy
+            # 2. Smyčka zkouší smazat starý soubor (dokud to Windows nedovolí)
+            # 3. Přesune nový soubor
+            # 4. Spustí ho
             bat_script = f"""
 @echo off
 echo Cekam na ukonceni aplikace...
 timeout /t 2 /nobreak > nul
+
 :LOOP
 del "{current_exe}" 2>nul
 if exist "{current_exe}" (
-    echo Soubor je stale uzamcen, zkousim znovu...
     timeout /t 1 > nul
     goto LOOP
 )
+
 move "new_version.exe" "{current_exe}"
+echo Spoustim novou verzi...
 start "" "{current_exe}"
 del "%~f0"
 """
             with open("update_installer.bat", "w") as f:
                 f.write(bat_script)
 
-            # Spustíme BAT a OKAMŽITĚ ukončíme Python
+            # Spustíme BAT a zavřeme aplikaci
             subprocess.Popen("update_installer.bat", shell=True)
-            self.parent.quit() # Ukončí mainloop
-            sys.exit()         # Ukončí proces
+            self.parent.quit()
+            sys.exit()
 
         except Exception as e:
             messagebox.showerror("Chyba", f"Instalace selhala:\n{e}")

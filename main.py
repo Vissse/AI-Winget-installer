@@ -13,6 +13,9 @@ from updater import CURRENT_VERSION, GitHubUpdater
 
 import os
 
+if "_MEIPASS2" in os.environ:
+    del os.environ["_MEIPASS2"]
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
