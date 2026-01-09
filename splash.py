@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 import random
 from config import COLORS
+from updater import CURRENT_VERSION
 
 class SplashScreen(tk.Toplevel):
     def __init__(self, parent):
@@ -19,7 +20,7 @@ class SplashScreen(tk.Toplevel):
         main_frame.pack(fill='both', expand=True)
 
         tk.Label(main_frame, text="AI Winget Installer", font=("Segoe UI", 22, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(pady=(50, 5))
-        tk.Label(main_frame, text="Alpha version 4.3.4", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
+        tk.Label(main_frame, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
 
         self.loading_label = tk.Label(main_frame, text="Inicializace...", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
         self.loading_label.pack(pady=(0, 5))

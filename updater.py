@@ -10,8 +10,8 @@ import threading
 # --- KONFIGURACE GITHUB ---
 # Zde zadejte to VEŘEJNÉ repo, kam dáváte Releases (pokud jste zvolil variantu 2)
 GITHUB_USER = "Vissse"       
-REPO_NAME = "AI-Winget-Installer"     
-CURRENT_VERSION = "4.3.4"    
+REPO_NAME = "Winget-Installer"     
+CURRENT_VERSION = "4.3.5"    
 
 class UpdateProgressDialog(tk.Toplevel):
     """Okno s průběhem stahování"""

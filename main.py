@@ -8,6 +8,7 @@ from splash import SplashScreen
 # Přidán import SettingsPage a SettingsManager
 from views import InstallerPage, UpdaterPage, PlaceholderPage, HealthCheckPage, SettingsPage
 from utils import SettingsManager
+from updater import CURRENT_VERSION
 
 import os
 
@@ -102,7 +103,7 @@ class MainApplication(tk.Tk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        ver_label = tk.Label(self.sidebar, text="Alpha version 4.3.4", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
+        ver_label = tk.Label(self.sidebar, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
         ver_label.pack(side="bottom", pady=20)
 
         # --- PROFIL (Upravený design) ---

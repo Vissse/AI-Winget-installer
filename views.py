@@ -784,4 +784,4 @@ class SettingsPage(tk.Frame):
 
     def check_update(self):
         updater = GitHubUpdater(self)
-        threading.Thread(target=lambda: updater.check_for_updates(silent=False))
+        threading.Thread(target=lambda: updater.check_for_updates(silent=False)).start()
