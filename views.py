@@ -1,7 +1,8 @@
 # views.py
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import google.generativeai as genai
+from google import genai 
+from google.genai import types # Pro pokročilejší typy, pokud budou třeba
 import json
 import threading
 import subprocess
@@ -189,48 +190,46 @@ class InstallerPage(tk.Frame):
 # Předpokládám, že WingetRunAPI a self.controller/self.progress jsou definovány jinde
 
     def get_winget_ids_thread(self, user_request):
-        model = genai.GenerativeModel('gemini-2.5-flash') 
+        # 1. Načtení klíče
+        settings = SettingsManager.load_settings()
+        api_key = settings.get("api_key", "")
         
         print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
         
-        # 1. KROK: Zjištění záměru (Intent Recognition)
-        # Ptáme se AI: Je to název, nebo kategorie?
+        # 2. Inicializace klienta (NOVÉ SDK)
+        try:
+            client = genai.Client(api_key=api_key)
+        except Exception as e:
+            print(f"Chyba init AI: {e}")
+            self.controller.after(0, self.stop_loading_animation)
+            return
+
         intent_prompt = f"""
         Jsi expert na Windows software a Winget repozitář.
         Uživatel zadal: "{user_request}"
-
-        Tvým úkolem je rozhodnout, jak tento dotaz hledat ve Winget.
-        
-        SCÉNÁŘ A (Konkrétní aplikace):
-        Pokud uživatel myslí konkrétní program (i s překlepem, např. "discrd", "chrom", "vlc"),
-        vráť POUZE opravený název.
-        
-        SCÉNÁŘ B (Obecný popis/Kategorie):
-        Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
-        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
-        
-        Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
-        QUERIES: název1;název2;název3
+        Pokud hledá konkrétní app, vrať jen opravený název.
+        Pokud hledá kategorii, vrať seznam nejlepších aplikací.
+        Odpověz POUZE ve formátu: QUERIES: app1;app2;app3
         """
 
         search_terms = []
         try:
-            intent_response = model.generate_content(intent_prompt)
-            raw_intent = intent_response.text.strip()
+            # NOVÉ VOLÁNÍ API
+            response = client.models.generate_content(
+                model="gemini-2.5-flash", 
+                contents=intent_prompt
+            )
+            raw_intent = response.text.strip()
             
-            # Parsování odpovědi (očekáváme "QUERIES: app1;app2...")
             if "QUERIES:" in raw_intent:
                 clean_line = raw_intent.replace("QUERIES:", "").strip()
-                # Rozdělíme středníkem a vyčistíme
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
-                # Fallback, kdyby AI neodpověděla správně
                 search_terms = [user_request]
-                
-            print(f"AI navrhlo hledat tyto výrazy: {search_terms}")
+            print(f"AI navrhlo: {search_terms}")
 
         except Exception as e:
-            print(f"Chyba při zjišťování záměru: {e}")
+            print(f"Chyba AI intent: {e}")
             search_terms = [user_request]
 
         # 2. KROK: Hromadné hledání ve Winget
@@ -242,21 +241,12 @@ class InstallerPage(tk.Frame):
         
         for term in search_terms:
             try:
-                # Omezíme výsledky (-n 3) aby toho nebylo moc pro další AI analýzu
                 cmd = f'winget search "{term}" --source winget --accept-source-agreements -n 3'
-                
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                
-                print(f"Spouštím Winget pro: {term}")
                 result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
-                
-                # Přidáme výstup do jednoho velkého textu
-                combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n"
-                combined_output += result.stdout
-                
-            except Exception as e:
-                print(f"Winget search selhal pro {term}: {e}")
+                combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n" + result.stdout
+            except: pass
             
             # Aktualizace progress baru (jen vizuálně)
             current_prog += 100
@@ -293,30 +283,23 @@ class InstallerPage(tk.Frame):
         """
 
         try:
-            response = model.generate_content(filter_prompt)
+            # NOVÉ VOLÁNÍ API
+            response = client.models.generate_content(
+                model="gemini-2.5-flash", 
+                contents=filter_prompt
+            )
             raw_text = response.text
-            # Očištění o markdown bloky
             json_str = raw_text.replace("```json", "").replace("```", "").strip()
-            
-            # Extrakce JSONu pomocí regexu pro jistotu
-            json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-            else:
-                data = []
+            match = re.search(r'\[.*\]', json_str, re.DOTALL)
+            data = json.loads(match.group(0)) if match else []
 
-            # Validace verzí (stejné jako předtím)
             for item in data:
-                if not item.get('version') or item['version'] == "Latest":
-                     # Zde bychom mohli volat get_real_version, ale pro rychlost to necháme být
-                     # nebo to voláme jen když je to nutné.
-                     item['version'] = "Latest/Unknown"
+                if not item.get('version') or item['version'] == "Latest": item['version'] = "Latest/Unknown"
 
             self.controller.after(0, self.display_search_results, data)
 
         except Exception as e:
-            print(f"Chyba při finálním parsování: {e}")
-            self.controller.after(0, lambda: messagebox.showerror("Chyba AI", f"Chyba zpracování.\nDetail: {e}"))
+            print(f"Chyba parsování: {e}")
             self.controller.after(0, self.stop_loading_animation)
 
     def stop_loading_animation(self):
@@ -443,21 +426,6 @@ class PlaceholderPage(tk.Frame):
         tk.Label(center_frame, text=f"Vítejte v {title}", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack()
         tk.Label(center_frame, text="Vyberte akci z menu vlevo", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(pady=(5, 20))
 
-# --- PŘIDAT NA KONEC SOUBORU views.py ---
-
-# views.py (část - nahraď třídu HealthCheckPage)
-
-# views.py (část)
-
-# views.py (část - nahraď třídu HealthCheckPage)
-
-# views.py (část - nahraď třídu HealthCheckPage)
-
-# views.py (část - nahraď třídu HealthCheckPage)
-
-# views.py (část - nahraď třídu HealthCheckPage)
-
-# views.py (část - nahraď třídu HealthCheckPage)
 
 class HealthCheckPage(tk.Frame):
     def __init__(self, parent, controller):
@@ -746,17 +714,27 @@ class SettingsPage(tk.Frame):
                              bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
                              relief="flat", padx=20, pady=8, cursor="hand2")
         update_btn.pack(side="left", padx=10)
+  
+        quota_btn = tk.Button(btn_frame, text="📊 Graf spotřeby", 
+                             command=lambda: webbrowser.open("https://aistudio.google.com/app/usage?timeRange=last-90-days"),
+                             bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
+                             relief="flat", padx=20, pady=8, cursor="hand2")
+        quota_btn.pack(side="left", padx=10)
+
+        # Přidáme hover efekt (aby tlačítko reagovalo na myš)
+        def on_quota_enter(e): quota_btn.config(bg=COLORS['item_hover'])
+        def on_quota_leave(e): quota_btn.config(bg=COLORS['input_bg'])
+        quota_btn.bind("<Enter>", on_quota_enter)
+        quota_btn.bind("<Leave>", on_quota_leave)
 
     def save_key(self):
         new_key = self.api_entry.get().strip()
         self.settings["api_key"] = new_key
+        
         if SettingsManager.save_settings(self.settings):
-            # Okamžitě rekonfigurujeme AI
-            try:
-                genai.configure(api_key=new_key)
-                messagebox.showinfo("Úspěch", "API klíč byl uložen a aktivován.")
-            except Exception as e:
-                messagebox.showerror("Chyba", f"Klíč uložen, ale konfigurace selhala: {e}")
+            # V novém SDK už není potřeba volat genai.configure()!
+            # Klíč se použije automaticky při dalším volání AI.
+            messagebox.showinfo("Úspěch", "API klíč byl uložen.")
         else:
             messagebox.showerror("Chyba", "Nepodařilo se uložit nastavení.")
 
@@ -773,26 +751,30 @@ class SettingsPage(tk.Frame):
 
     def _test_connection_thread(self, key):
         try:
-            # Nakonfigurujeme dočasně pro test
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            # Pošleme miniaturní dotaz
-            response = model.generate_content("Hello", generation_config={"max_output_tokens": 5})
+            # NOVÉ SDK: Inicializace klienta
+            client = genai.Client(api_key=key)
+            
+            # NOVÉ SDK: Generování obsahu (Test)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="Hello",
+                config=types.GenerateContentConfig(max_output_tokens=5)
+            )
             
             if response and response.text:
-                self.controller.after(0, lambda: self.update_status("✅ Klíč je AKTIVNÍ. Limit je v pořádku.", COLORS['success']))
+                self.controller.after(0, lambda: self.update_status("✅ Klíč je AKTIVNÍ (GenAI SDK).", COLORS['success']))
             else:
-                self.controller.after(0, lambda: self.update_status("❌ Klíč se zdá neplatný (žádná odpověď).", COLORS['danger']))
+                self.controller.after(0, lambda: self.update_status("❌ Žádná odpověď.", COLORS['danger']))
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg:
-                msg = "⚠️ Limit vyčerpán (Quota Exceeded)."
+                msg = "⚠️ Limit vyčerpán (429)."
                 color = "orange"
-            elif "400" in error_msg or "API key not valid" in error_msg:
+            elif "400" in error_msg or "INVALID_ARGUMENT" in error_msg:
                 msg = "❌ Neplatný API klíč."
                 color = COLORS['danger']
             else:
-                msg = f"❌ Chyba spojení: {error_msg[:50]}..."
+                msg = f"❌ Chyba: {error_msg[:30]}..."
                 color = COLORS['danger']
             
             self.controller.after(0, lambda: self.update_status(msg, color))

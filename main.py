@@ -3,7 +3,6 @@ import tkinter as tk
 import sys
 import ctypes
 from PIL import Image, ImageTk 
-import google.generativeai as genai
 from config import COLORS
 from splash import SplashScreen
 # Přidán import SettingsPage a SettingsManager
@@ -31,16 +30,6 @@ class MainApplication(tk.Tk):
         self.withdraw() 
         self.title("AI Winget Installer")
         
-        # --- NAČTENÍ API KLÍČE PŘI STARTU ---
-        self.settings = SettingsManager.load_settings()
-        api_key = self.settings.get("api_key", "")
-        if api_key:
-            try:
-                genai.configure(api_key=api_key)
-            except:
-                print("Chyba konfigurace AI při startu")
-        # ------------------------------------
-
         # --- FIX PRO TASKBAR IKONU ---
         try:
             myappid = 'mycompany.aiwinget.installer.v4'
@@ -113,7 +102,7 @@ class MainApplication(tk.Tk):
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
-        ver_label = tk.Label(self.sidebar, text="Alpha version 4.3.2", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
+        ver_label = tk.Label(self.sidebar, text="Alpha version 4.3.4", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
         ver_label.pack(side="bottom", pady=20)
 
         # --- PROFIL (Upravený design) ---
