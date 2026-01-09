@@ -1,13 +1,15 @@
-# splash.py
 import tkinter as tk
 from tkinter import ttk
 import random
 from config import COLORS
-from updater import CURRENT_VERSION
+from updater import CURRENT_VERSION 
 
 class SplashScreen(tk.Toplevel):
-    def __init__(self, parent):
+    # PŘIDÁNO: on_complete
+    def __init__(self, parent, on_complete=None):
         super().__init__(parent)
+        self.on_complete = on_complete 
+        
         self.title("Načítání...")
         w, h = 450, 280
         ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -42,6 +44,7 @@ class SplashScreen(tk.Toplevel):
             increment = random.randint(1, 4)
             self.progress_val += increment
             self.progress['value'] = self.progress_val
+            # ... (logika textu loading_steps zůstává stejná) ...
             if self.progress_val > 20 and self.step_index == 0:
                 self.step_index = 1
                 self.loading_label.config(text=self.loading_steps[1])
@@ -51,6 +54,7 @@ class SplashScreen(tk.Toplevel):
             elif self.progress_val > 80 and self.step_index == 2:
                 self.step_index = 3
                 self.loading_label.config(text=self.loading_steps[3])
+
             self.after(30, self.animate)
         else:
             self.loading_label.config(text=self.loading_steps[4])
@@ -58,4 +62,8 @@ class SplashScreen(tk.Toplevel):
 
     def close_splash(self):
         self.destroy()
-        self.master.deiconify()
+        # Pokud máme callback, zavoláme ho (místo deiconify)
+        if self.on_complete:
+            self.on_complete()
+        else:
+            self.master.deiconify()

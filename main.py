@@ -156,7 +156,8 @@ class MainApplication(tk.Tk):
         self.menu_buttons = {}
         tk.Button(self.sidebar, text="☰  Všechny aplikace", command=lambda: self.switch_view("all_apps"),
                   bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
-                  relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))
+                  relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))¨
+        
 
         self.create_menu_item("installer", "📦  Installer")
         self.create_menu_item("updater", "🔄  Updater")
@@ -183,7 +184,15 @@ class MainApplication(tk.Tk):
         self.current_view = None
         self.switch_view("installer")
         
-        SplashScreen(self)
+        SplashScreen(self, on_complete=self.run_startup_update_check)
+
+    def run_startup_update_check(self):
+            """Spustí kontrolu updatu ve vlákně, aby nezamrzlo GUI (i když je okno skryté)."""
+            updater = GitHubUpdater(self)
+            
+            # Spustíme kontrolu. Parametr 'on_continue' říká, co dělat, když update není (nebo ho uživatel zruší).
+            # V našem případě: self.deiconify (zobrazit hlavní okno).
+            threading.Thread(target=lambda: updater.check_for_updates(silent=True, on_continue=self.deiconify), daemon=True).start()
 
     # ... (zbytek metod create_menu_item, create_project_item, on_menu_hover zůstává stejný)
     
