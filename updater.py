@@ -6,11 +6,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from packaging import version
 import threading
+import time
 
 # --- KONFIGURACE GITHUB ---
-GITHUB_USER = "Vissse"       
-REPO_NAME = "AI-Winget-Installer"     
-CURRENT_VERSION = "4.3.10" 
+GITHUB_USER = "Vissse"
+REPO_NAME = "AI-Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV (podle screenshotů to není AI-Winget-Installer)
+CURRENT_VERSION = "4.3.11"      # Zvedněte verzi, až to budete vydávat
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -48,13 +49,14 @@ class UpdateProgressDialog(tk.Toplevel):
         threading.Thread(target=self.download_thread, daemon=True).start()
 
     def download_thread(self):
+        new_exe_name = "new_version.exe"
         try:
-            new_exe_name = "new_version.exe"
-            # Smažeme případný starý poškozený soubor
+            # 1. Úklid před startem (Smazat starý, pokud existuje)
             if os.path.exists(new_exe_name):
                 try: os.remove(new_exe_name)
                 except: pass
 
+            # 2. Stahování
             response = requests.get(self.download_url, stream=True)
             downloaded = 0
             
@@ -68,17 +70,22 @@ class UpdateProgressDialog(tk.Toplevel):
                             percent = (downloaded / self.total_size) * 100
                             self.after(0, lambda p=percent: self.update_ui(p))
             
-            # --- KLÍČOVÁ OPRAVA: KONTROLA VELIKOSTI ---
-            # Pokud se stáhlo méně bajtů, než má soubor mít, je to chyba!
+            # 3. Kontrola integrity
             if self.total_size > 0 and downloaded < self.total_size:
-                raise Exception("Stažený soubor je nekompletní.")
+                raise Exception("Stažený soubor je nekompletní (přerušeno).")
 
+            # Vše OK -> Spustit instalaci
             self.after(0, self.on_success)
             self.after(0, self.destroy)
 
         except Exception as e:
+            # Chyba -> Smazat poškozený soubor
+            if os.path.exists(new_exe_name):
+                try: os.remove(new_exe_name)
+                except: pass
+                
             self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
-            self.after(0, self.on_fail) # Při chybě zavoláme on_fail (otevře starou app)
+            self.after(0, self.on_fail)
             self.after(0, self.destroy)
 
     def update_ui(self, percent):
@@ -90,7 +97,6 @@ class GitHubUpdater:
         self.parent = parent_window
         self.api_url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest"
 
-    # Parametr on_continue: Funkce, která se zavolá, když se NEAKTUALIZUJE (např. otevři hlavní okno)
     def check_for_updates(self, silent=False, on_continue=None):
         try:
             print(f"Kontroluji update na: {self.api_url}")
@@ -103,8 +109,6 @@ class GitHubUpdater:
                 if version.parse(latest_tag) > version.parse(CURRENT_VERSION):
                     asset_url, size = self._get_exe_info(data)
                     if asset_url:
-                        # Pokud je update, zeptáme se. 
-                        # Callbacky zajistí správné chování (Yes -> Download, No -> on_continue)
                         self.parent.after(0, lambda: self._prompt_update(latest_tag, asset_url, size, on_continue))
                         return
                     else:
@@ -118,8 +122,6 @@ class GitHubUpdater:
             print(f"Update error: {e}")
             if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", f"{e}"))
 
-        # Pokud jsme tady, znamená to, že update nebyl nalezen nebo nastala chyba.
-        # Pokračujeme spuštěním aplikace (pokud byl zadán callback).
         if on_continue:
             self.parent.after(0, on_continue)
 
@@ -135,24 +137,27 @@ class GitHubUpdater:
         msg = f"Je dostupná nová verze {new_version}!\n\nChcete ji stáhnout a nainstalovat?\n(Aplikace se restartuje)"
         
         if messagebox.askyesno("Aktualizace", msg, parent=self.parent):
-            # Uživatel řekl ANO -> Stahujeme
-            # Pokud selže stahování, voláme on_continue (otevře se appka)
             UpdateProgressDialog(self.parent, size, url, self._perform_restart, on_continue)
         else:
-            # Uživatel řekl NE -> Otevíráme aplikaci
             if on_continue: on_continue()
 
     def _perform_restart(self):
-        """Výměna souborů a restart (voláno jen když je soubor 100% stažený)"""
         try:
             current_exe = os.path.basename(sys.executable)
             if not current_exe.endswith(".exe"): current_exe = "AI_Winget_Installer.exe"
 
-            # Prodloužený timeout na 3 sekundy pro jistotu
+            # BAT SKRIPT S POKROČILOU SMYČKOU (Čeká, dokud se soubor neuvolní)
             bat_script = f"""
 @echo off
-timeout /t 3 > nul
-del "{current_exe}"
+echo Cekam na ukonceni aplikace...
+timeout /t 2 /nobreak > nul
+:LOOP
+del "{current_exe}" 2>nul
+if exist "{current_exe}" (
+    echo Soubor je stale uzamcen, zkousim znovu...
+    timeout /t 1 > nul
+    goto LOOP
+)
 move "new_version.exe" "{current_exe}"
 start "" "{current_exe}"
 del "%~f0"
@@ -160,8 +165,10 @@ del "%~f0"
             with open("update_installer.bat", "w") as f:
                 f.write(bat_script)
 
+            # Spustíme BAT a OKAMŽITĚ ukončíme Python
             subprocess.Popen("update_installer.bat", shell=True)
-            sys.exit()
+            self.parent.quit() # Ukončí mainloop
+            sys.exit()         # Ukončí proces
 
         except Exception as e:
             messagebox.showerror("Chyba", f"Instalace selhala:\n{e}")
