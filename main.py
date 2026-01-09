@@ -2,13 +2,14 @@
 import tkinter as tk
 import sys
 import ctypes
+import threading
 from PIL import Image, ImageTk 
 from config import COLORS
 from splash import SplashScreen
 # Přidán import SettingsPage a SettingsManager
 from views import InstallerPage, UpdaterPage, PlaceholderPage, HealthCheckPage, SettingsPage
 from utils import SettingsManager
-from updater import CURRENT_VERSION
+from updater import CURRENT_VERSION, GitHubUpdater
 
 import os
 
@@ -30,6 +31,9 @@ class MainApplication(tk.Tk):
         super().__init__()
         self.withdraw() 
         self.title("AI Winget Installer")
+
+        updater = GitHubUpdater(self)
+        threading.Thread(target=lambda: updater.check_for_updates(silent=True), daemon=True).start()
         
         # --- FIX PRO TASKBAR IKONU ---
         try:
