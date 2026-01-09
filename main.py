@@ -156,7 +156,7 @@ class MainApplication(tk.Tk):
         self.menu_buttons = {}
         tk.Button(self.sidebar, text="☰  Všechny aplikace", command=lambda: self.switch_view("all_apps"),
                   bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
-                  relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))¨
+                  relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))
         
 
         self.create_menu_item("installer", "📦  Installer")
