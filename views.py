@@ -682,50 +682,67 @@ class SettingsPage(tk.Frame):
         link_lbl.bind("<Button-1>", lambda e: webbrowser.open("https://aistudio.google.com/app/apikey"))
 
         
-        # Tlačítka
+        # ... (kód nad tímto blokem v SettingsPage.__init__ zůstává stejný) ...
+        
+        # Rám pro tlačítka
         btn_frame = tk.Frame(api_frame, bg=COLORS['bg_sidebar'])
         btn_frame.pack(fill='x', pady=(20, 0))
 
-        # ZMĚNA: Barva 'bg' změněna na COLORS['accent']
+        # 1. Tlačítko ULOŽIT (Modré)
         save_btn = tk.Button(btn_frame, text="💾 Uložit klíč", command=self.save_key,
                              bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"),
                              relief="flat", padx=20, pady=8, cursor="hand2")
         save_btn.pack(side="left")
 
-        # Přidání hover efektu pro modré tlačítko
         def on_save_enter(e): save_btn.config(bg=COLORS['accent_hover'])
         def on_save_leave(e): save_btn.config(bg=COLORS['accent'])
         save_btn.bind("<Enter>", on_save_enter)
         save_btn.bind("<Leave>", on_save_leave)
 
-        check_btn = tk.Button(btn_frame, text="⚡ Ověřit stav limitu", command=self.check_api_status,
+        # 2. Tlačítko OVĚŘIT (Šedé + Animace + Nový text)
+        # ZMĚNA: Text přepsán na "Ověřit správnost API"
+        check_btn = tk.Button(btn_frame, text="⚡ Ověřit správnost API", command=self.check_api_status,
                              bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
                              relief="flat", padx=20, pady=8, cursor="hand2")
         check_btn.pack(side="left", padx=10)
 
-        # --- STATUS PANEL ---
-        self.status_frame = tk.Frame(content, bg=COLORS['bg_main'], pady=20)
-        self.status_frame.pack(fill='x')
-        self.status_label = tk.Label(self.status_frame, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'])
-        self.status_label.pack(anchor="w")
+        # ZMĚNA: Přidána animace po najetí (Hover)
+        def on_check_enter(e): check_btn.config(bg=COLORS['item_hover'])
+        def on_check_leave(e): check_btn.config(bg=COLORS['input_bg'])
+        check_btn.bind("<Enter>", on_check_enter)
+        check_btn.bind("<Leave>", on_check_leave)
 
+        # 3. Tlačítko UPDATE (Šedé + Animace)
         update_btn = tk.Button(btn_frame, text="🔄 Zkontrolovat update", 
                              command=self.check_update,
                              bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
                              relief="flat", padx=20, pady=8, cursor="hand2")
         update_btn.pack(side="left", padx=10)
+
+        # ZMĚNA: Přidána animace po najetí (Hover)
+        def on_update_enter(e): update_btn.config(bg=COLORS['item_hover'])
+        def on_update_leave(e): update_btn.config(bg=COLORS['input_bg'])
+        update_btn.bind("<Enter>", on_update_enter)
+        update_btn.bind("<Leave>", on_update_leave)
   
+        # 4. Tlačítko GRAF (Šedé + Animace)
         quota_btn = tk.Button(btn_frame, text="📊 Graf spotřeby", 
                              command=lambda: webbrowser.open("https://aistudio.google.com/app/usage?timeRange=last-90-days"),
                              bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
                              relief="flat", padx=20, pady=8, cursor="hand2")
         quota_btn.pack(side="left", padx=10)
 
-        # Přidáme hover efekt (aby tlačítko reagovalo na myš)
         def on_quota_enter(e): quota_btn.config(bg=COLORS['item_hover'])
         def on_quota_leave(e): quota_btn.config(bg=COLORS['input_bg'])
         quota_btn.bind("<Enter>", on_quota_enter)
         quota_btn.bind("<Leave>", on_quota_leave)
+
+    
+        # --- STATUS PANEL ---
+        self.status_frame = tk.Frame(content, bg=COLORS['bg_main'], pady=20)
+        self.status_frame.pack(fill='x')
+        self.status_label = tk.Label(self.status_frame, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'])
+        self.status_label.pack(anchor="w")
 
     def save_key(self):
         new_key = self.api_entry.get().strip()

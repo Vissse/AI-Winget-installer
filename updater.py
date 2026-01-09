@@ -11,7 +11,7 @@ import threading
 # Zde zadejte to VEŘEJNÉ repo, kam dáváte Releases (pokud jste zvolil variantu 2)
 GITHUB_USER = "Vissse"       
 REPO_NAME = "Winget-Installer"     
-CURRENT_VERSION = "4.3.5"    
+CURRENT_VERSION = "4.3.6"    
 
 class UpdateProgressDialog(tk.Toplevel):
     """Okno s průběhem stahování"""
