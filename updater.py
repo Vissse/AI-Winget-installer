@@ -10,7 +10,7 @@ import threading
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"       
 REPO_NAME = "AI-Winget-Installer"     
-CURRENT_VERSION = "4.3.9" 
+CURRENT_VERSION = "4.3.10" 
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
