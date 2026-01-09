@@ -9,7 +9,7 @@ from packaging import version
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"  
 REPO_NAME = "Winget-Installer"
-CURRENT_VERSION = "4.3.0"  # <-- TOTO MUSÍTE ZVEDAT PŘI KAŽDÉM UPDATE
+CURRENT_VERSION = "4.3.2"  # <-- TOTO MUSÍTE ZVEDAT PŘI KAŽDÉM UPDATE
 
 class GitHubUpdater:
     def __init__(self, parent_window=None):
