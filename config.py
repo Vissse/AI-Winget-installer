@@ -1,6 +1,8 @@
 # config.py
 
-API_KEY = "AIzaSyC04q0Magnd7hV6oC-mh6zvd4UUT6kxhsY" 
+# API_KEY = "..."  <-- TOTO UŽ NEBUDEME POUŽÍVAT NATVRDO
+DEFAULT_API_KEY = "" # Může zůstat prázdné
+SETTINGS_FILE = "user_settings.json"
 OUTPUT_FILE = "install_apps.bat"
 
 COLORS = {

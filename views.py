@@ -6,302 +6,52 @@ import json
 import threading
 import subprocess
 import re
+import webbrowser
 from PIL import Image, ImageTk
 from config import COLORS, OUTPUT_FILE
-from utils import ToolTip, ModernScrollbar, IconLoader, WingetRunAPI  # <--- PŘIDÁN IMPORT API
+from utils import ToolTip, ModernScrollbar, IconLoader, SettingsManager
 from install_manager import InstallationDialog
-
-# --- Updater Page ---
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-import subprocess
-import re
-from PIL import Image, ImageTk
-
-# Předpokládám, že ModernScrollbar, COLORS, IconLoader a další máte importované
-# Pokud ne, nechte tam své původní importy
 
 class UpdaterPage(tk.Frame):
     def __init__(self, parent, controller):
         super().__init__(parent, bg=COLORS['bg_main'])
         self.controller = controller
+
+        # --- Centered Container (Visual Match to Upcoming/Photo) ---
+        # Používáme place() pro přesné vycentrování v rámci okna
+        center_frame = tk.Frame(self, bg=COLORS['bg_main'])
+        center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        # 1. Ikona
+        # Používám textové emoji jako zástupný symbol (místo původního načítání obrázků).
+        # Pokud chceš přesně tu ikonu z fotky, nahraď tento Label za Label s obrázkem (ImageTk).
+        tk.Label(
+            center_frame, 
+            text="🔄",  # Zvoleno emoji pro Updater (nebo použij 📦)
+            font=("Segoe UI Emoji", 48), 
+            bg=COLORS['bg_main'], 
+            fg=COLORS['sub_text'] # Šedá barva pro "neaktivní" vzhled
+        ).pack(pady=(0, 20))
+
+        # 2. Hlavní nadpis
+        tk.Label(
+            center_frame, 
+            text="Vítejte v Updater", 
+            font=("Segoe UI", 18, "bold"), 
+            bg=COLORS['bg_main'], 
+            fg="white"
+        ).pack()
+
+        # 3. Podnadpis / Instrukce
+        tk.Label(
+            center_frame, 
+            text="Vyberte akci z menu vlevo",  # Text podle vzoru na fotce
+            font=("Segoe UI", 10), 
+            bg=COLORS['bg_main'], 
+            fg=COLORS['sub_text']
+        ).pack(pady=(5, 20))
+
         
-        # Cache pro ikonky
-        self.icon_cache = {} 
-        self.rendering_task = None  # Pro uložení ID úlohy vykreslování
-        self.stop_rendering = False # Vlajka pro zastavení vykreslování
-        
-        try:
-            self.default_icon = ImageTk.PhotoImage(Image.new('RGB', (32, 32), color=COLORS['item_bg']))
-        except: pass
-
-        self.upgradable_apps = [] 
-
-        # --- GUI HEADER ---
-        header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=15)
-        header_frame.pack(fill='x')
-        tk.Label(header_frame, text="Správce aktualizací", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
-
-        # --- CONTROLS ---
-        controls_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
-        controls_frame.pack(fill='x', pady=(0, 10))
-
-        self.stats_label = tk.Label(controls_frame, text="Klikněte na 'Obnovit' pro vyhledání aktualizací.", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
-        self.stats_label.pack(side="left")
-
-        btn_frame = tk.Frame(controls_frame, bg=COLORS['bg_main'])
-        btn_frame.pack(side="right")
-
-        self.refresh_btn = tk.Button(btn_frame, text="🔄 Obnovit", command=self.start_scan, bg=COLORS['input_bg'], fg="white", relief="flat", padx=15, pady=5, cursor="hand2")
-        self.refresh_btn.pack(side="left", padx=5)
-        
-        self.update_all_btn = tk.Button(btn_frame, text="🚀 Aktualizovat vše", command=self.update_all, bg=COLORS['success'], fg="white", relief="flat", padx=15, pady=5, cursor="hand2", state="disabled")
-        self.update_all_btn.pack(side="left", padx=5)
-
-        self.progress = ttk.Progressbar(self, orient="horizontal", mode="indeterminate")
-        self.progress.pack(fill='x', padx=20, pady=(0, 10))
-
-        # --- LIST CONTAINER ---
-        self.list_container = tk.Frame(self, bg=COLORS['bg_sidebar'])
-        self.list_container.pack(fill='both', expand=True, padx=20, pady=(0, 20))
-        
-        self.list_canvas = tk.Canvas(self.list_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
-        self.list_scrollbar = ModernScrollbar(self.list_container, command=self.list_canvas.yview, bg=COLORS['bg_sidebar'])
-        self.list_scrollable = tk.Frame(self.list_canvas, bg=COLORS['bg_sidebar'])
-        
-        self.list_scrollable.bind("<Configure>", lambda e: self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all")))
-        self.list_canvas.create_window((0, 0), window=self.list_scrollable, anchor="nw", width=480)
-        self.list_canvas.configure(yscrollcommand=self.list_scrollbar.set)
-        
-        # Optimalizace změny velikosti
-        self.list_canvas.bind("<Configure>", self._on_canvas_configure)
-
-        self.list_canvas.pack(side="left", fill="both", expand=True)
-        self.list_scrollbar.pack(side="right", fill="y")
-        self._bind_mousewheel(self.list_container, self.list_canvas)
-
-    def _on_canvas_configure(self, event):
-        self.list_canvas.itemconfig(self.list_canvas.find_all()[0], width=event.width)
-
-    def _bind_mousewheel(self, widget, canvas):
-        def _on_mousewheel(event):
-            if canvas.bbox("all"):
-                scroll_height = canvas.bbox("all")[3]
-                visible_height = canvas.winfo_height()
-                if scroll_height <= visible_height: return 
-            if event.num == 5 or event.delta < 0: canvas.yview_scroll(1, "units")
-            elif event.num == 4 or event.delta > 0: canvas.yview_scroll(-1, "units")
-        
-        bind_enter = lambda e: {canvas.bind_all("<MouseWheel>", _on_mousewheel), canvas.bind_all("<Button-4>", _on_mousewheel), canvas.bind_all("<Button-5>", _on_mousewheel)}
-        bind_leave = lambda e: {canvas.unbind_all("<MouseWheel>"), canvas.unbind_all("<Button-4>"), canvas.unbind_all("<Button-5>")}
-        widget.bind('<Enter>', bind_enter)
-        widget.bind('<Leave>', bind_leave)
-
-    def start_scan(self):
-        # Zastavíme předchozí vykreslování, pokud běží
-        self.stop_rendering = True
-        if self.rendering_task:
-            self.after_cancel(self.rendering_task)
-            
-        self.progress.start(10)
-        self.stats_label.config(text="Prohledávám nainstalované aplikace (čekejte)...")
-        self.refresh_btn.config(state="disabled")
-        self.update_all_btn.config(state="disabled")
-        
-        # Vyčistit seznam
-        for widget in self.list_scrollable.winfo_children(): widget.destroy()
-        self.list_canvas.yview_moveto(0)
-        
-        threading.Thread(target=self.scan_thread, daemon=True).start()
-
-    def scan_thread(self):
-        self.upgradable_apps = []
-        installed_apps = []
-        try:
-            # Přidáno --source winget pro rychlost, odstraňte pokud chcete i MS Store
-            cmd = "winget list --accept-source-agreements --source winget"
-            
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
-            lines = result.stdout.splitlines()
-            start_index = 0
-            
-            for i, line in enumerate(lines):
-                if line.startswith("Name") and "Id" in line:
-                    start_index = i + 2 
-                    break
-            
-            for line in lines[start_index:]:
-                parts = re.split(r'\s{2,}', line.strip())
-                if len(parts) >= 3:
-                    name = parts[0]
-                    app_id = parts[1]
-                    version = parts[2]
-                    available = ""
-                    if len(parts) >= 4:
-                        potential = parts[3]
-                        if potential and (potential[0].isdigit() or potential[0] == 'v'):
-                            available = potential
-                    
-                    app_data = {"name": name, "id": app_id, "version": version, "available": available}
-                    installed_apps.append(app_data)
-                    if available: self.upgradable_apps.append(app_data)
-
-            self.controller.after(0, self.display_apps, installed_apps)
-        except Exception as e:
-            print(f"Chyba scanu: {e}")
-            self.controller.after(0, self.scan_error)
-
-    def scan_error(self):
-        self.progress.stop()
-        self.stats_label.config(text="Chyba při načítání aplikací.")
-        self.refresh_btn.config(state="normal")
-
-    def display_apps(self, apps):
-        self.progress.stop()
-        self.refresh_btn.config(state="normal")
-        self.stop_rendering = False # Povolíme vykreslování
-        
-        count_updatable = len(self.upgradable_apps)
-        self.stats_label.config(text=f"Nainstalováno: {len(apps)} | Aktualizace: {count_updatable}")
-        
-        if count_updatable > 0:
-            self.update_all_btn.config(state="normal", bg=COLORS['success'])
-        else:
-            self.update_all_btn.config(state="disabled", bg=COLORS['input_bg'])
-
-        # Seřadíme: update první
-        apps.sort(key=lambda x: (0 if x['available'] else 1, x['name'].lower()))
-        
-        # Spustíme generátor vykreslování
-        self.render_generator = self._app_render_generator(apps)
-        self._process_render_queue()
-
-    def _app_render_generator(self, apps):
-        """Generátor, který vrací aplikace jednu po druhé."""
-        for app in apps:
-            yield app
-
-    def _process_render_queue(self):
-        """Vykresluje dávky aplikací s vynuceným update_idletasks."""
-        if self.stop_rendering: return
-
-        # Vykreslíme malou dávku (např. 5 ks), aby GUI zůstalo responzivní
-        # Menší dávka = plynulejší, ale celkově pomalejší načtení
-        # Větší dávka = rychlejší načtení, ale možné záseky
-        batch_size = 6 
-        
-        try:
-            for _ in range(batch_size):
-                if self.stop_rendering: return
-                app = next(self.render_generator)
-                self.create_app_card(app)
-            
-            # DŮLEŽITÉ: Vynutíme překreslení GUI po každé dávce, 
-            # aby uživatel neviděl jen šedé pruhy, ale skutečný obsah.
-            self.list_scrollable.update_idletasks()
-            
-            # Naplánujeme další dávku za 2ms
-            self.rendering_task = self.after(2, self._process_render_queue)
-            
-        except StopIteration:
-            # Hotovo
-            self.list_canvas.update_idletasks()
-            self.list_scrollbar.redraw()
-            pass
-
-    def _on_btn_hover(self, btn, color_enter, color_leave):
-        btn.bind("<Enter>", lambda e: btn.config(bg=color_enter))
-        btn.bind("<Leave>", lambda e: btn.config(bg=color_leave))
-
-    def create_app_card(self, app):
-        # KARTA (Visual Upgrade)
-        card = tk.Frame(self.list_scrollable, bg=COLORS['item_bg'], pady=10, padx=15)
-        # pack expand=False je důležité, aby se frame zbytečně neroztahoval, dokud nemá obsah
-        card.pack(fill='x', padx=(10, 0), pady=4)
-
-        # --- Levý kontejner (Ikonka + Text) ---
-        left_container = tk.Frame(card, bg=COLORS['item_bg'])
-        left_container.pack(side="left", fill="both", expand=True)
-
-        # Ikonka (Fixní 48x48 box, aby text neposkakoval)
-        icon_box = tk.Frame(left_container, bg=COLORS['item_bg'], width=48, height=48)
-        icon_box.pack(side="left", padx=(0, 15), anchor="center")
-        icon_box.pack_propagate(False) 
-
-        icon_label = tk.Label(icon_box, image=self.default_icon, bg=COLORS['item_bg'])
-        icon_label.pack(expand=True, fill="both")
-
-        # Asynchronní načtení ikony
-        try:
-             threading.Thread(target=lambda: IconLoader.load_async(app, icon_label, self.controller), daemon=True).start()
-        except: pass
-
-        # Text
-        text_box = tk.Frame(left_container, bg=COLORS['item_bg'])
-        text_box.pack(side="left", fill="both", expand=True, anchor="w")
-
-        # Název
-        tk.Label(text_box, text=app['name'], font=("Segoe UI", 11, "bold"), 
-                 bg=COLORS['item_bg'], fg="white", anchor="w").pack(fill="x")
-        
-        # ID a verze
-        meta_info = f"ID: {app['id']}"
-        tk.Label(text_box, text=meta_info, font=("Segoe UI", 8), 
-                 bg=COLORS['item_bg'], fg=COLORS['sub_text'], anchor="w").pack(fill="x")
-        
-        ver_frame = tk.Frame(text_box, bg=COLORS['item_bg'])
-        ver_frame.pack(fill="x", pady=(2,0))
-        tk.Label(ver_frame, text="Verze: ", font=("Segoe UI", 8), bg=COLORS['item_bg'], fg="gray").pack(side="left")
-        tk.Label(ver_frame, text=app['version'], font=("Segoe UI", 8), bg=COLORS['item_bg'], fg=COLORS['sub_text']).pack(side="left")
-
-        # --- Pravý kontejner (Akce) ---
-        right_container = tk.Frame(card, bg=COLORS['item_bg'])
-        right_container.pack(side="right", anchor="center")
-
-        if app['available']:
-            # Nová verze + Tlačítko
-            info_box = tk.Frame(right_container, bg=COLORS['item_bg'], padx=10)
-            info_box.pack(side="left")
-            
-            tk.Label(info_box, text="Dostupná:", font=("Segoe UI", 8), bg=COLORS['item_bg'], fg="gray").pack(anchor="e")
-            tk.Label(info_box, text=app['available'], font=("Segoe UI", 10, "bold"), bg=COLORS['item_bg'], fg=COLORS['accent']).pack(anchor="e")
-            
-            upd_btn = tk.Button(right_container, text="Aktualizovat", font=("Segoe UI", 9, "bold"), 
-                                bg=COLORS['success'], fg="white", 
-                                activebackground=COLORS['success_hover'], activeforeground="white",
-                                relief="flat", padx=15, pady=5, cursor="hand2",
-                                command=lambda a=app: self.update_single(a))
-            upd_btn.pack(side="right")
-            self._on_btn_hover(upd_btn, COLORS['success_hover'], COLORS['success'])
-        else:
-            # Aktuální
-            status_box = tk.Frame(right_container, bg=COLORS['item_bg'], padx=10)
-            status_box.pack(side="right")
-            tk.Label(status_box, text="✓ Aktuální", font=("Segoe UI", 9), bg=COLORS['item_bg'], fg="#6c757d").pack()
-
-    def update_single(self, app):
-        if "installer" in self.controller.views:
-            installer = self.controller.views["installer"]
-            queue_item = {"name": app['name'], "id": app['id'], "version": app['available'], "website": "Unknown"}
-            installer.add_item_to_queue(queue_item)
-            messagebox.showinfo("Updater", f"{app['name']} byla přidána do instalační fronty.")
-
-    def update_all(self):
-        if not self.upgradable_apps: return
-        if "installer" in self.controller.views:
-            installer = self.controller.views["installer"]
-            count = 0
-            for app in self.upgradable_apps:
-                queue_item = {"name": app['name'], "id": app['id'], "version": app['available'], "website": "Unknown"}
-                installer.add_item_to_queue(queue_item)
-                count += 1
-            messagebox.showinfo("Updater", f"{count} aplikací bylo přidáno do instalační fronty.\nPřejděte na záložku Installer pro spuštění.")
-            self.controller.switch_view("installer")
-            
 # --- Installer Page ---
 class InstallerPage(tk.Frame):
     def __init__(self, parent, controller):
@@ -438,148 +188,134 @@ class InstallerPage(tk.Frame):
 # Předpokládám, že WingetRunAPI a self.controller/self.progress jsou definovány jinde
 
     def get_winget_ids_thread(self, user_request):
+        model = genai.GenerativeModel('gemini-2.5-flash') 
+        
+        print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
+        
+        # 1. KROK: Zjištění záměru (Intent Recognition)
+        # Ptáme se AI: Je to název, nebo kategorie?
+        intent_prompt = f"""
+        Jsi expert na Windows software a Winget repozitář.
+        Uživatel zadal: "{user_request}"
+
+        Tvým úkolem je rozhodnout, jak tento dotaz hledat ve Winget.
+        
+        SCÉNÁŘ A (Konkrétní aplikace):
+        Pokud uživatel myslí konkrétní program (i s překlepem, např. "discrd", "chrom", "vlc"),
+        vráť POUZE opravený název.
+        
+        SCÉNÁŘ B (Obecný popis/Kategorie):
+        Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
+        vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
+        
+        Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
+        QUERIES: název1;název2;název3
+        """
+
+        search_terms = []
         try:
-            model = genai.GenerativeModel('gemini-2.5-flash') 
+            intent_response = model.generate_content(intent_prompt)
+            raw_intent = intent_response.text.strip()
             
-            print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
-            
-            # ---------------------------------------------------------
-            # 1. KROK: Zjištění záměru (Intent Recognition)
-            # ---------------------------------------------------------
-            intent_prompt = f"""
-            Jsi expert na Windows software a Winget repozitář.
-            Uživatel zadal: "{user_request}"
-
-            Tvým úkolem je rozhodnout, jak tento dotaz hledat ve Winget.
-            
-            SCÉNÁŘ A (Konkrétní aplikace):
-            Pokud uživatel myslí konkrétní program (i s překlepem, např. "discrd", "chrom", "vlc"),
-            vráť POUZE opravený název.
-            
-            SCÉNÁŘ B (Obecný popis/Kategorie):
-            Pokud uživatel hledá typ programu (např. "úprava videa", "webový prohlížeč", "pdf reader", "něco na hudbu"),
-            vyber několik NEJLEPŠÍCH a NEJPOPULÁRNĚJŠÍCH aplikací pro Windows v této kategorii, které jsou určitě na Wingetu.
-            
-            Odpověz POUZE v tomto formátu (žádný markdown, žádný úvod):
-            QUERIES: název1;název2;název3
-            """
-
-            search_terms = []
-            try:
-                intent_response = model.generate_content(intent_prompt)
-                raw_intent = intent_response.text.strip()
-                
-                if "QUERIES:" in raw_intent:
-                    clean_line = raw_intent.replace("QUERIES:", "").strip()
-                    search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
-                else:
-                    search_terms = [user_request]
-                    
-                print(f"AI navrhlo hledat tyto výrazy: {search_terms}")
-
-            except Exception as e:
-                print(f"Chyba při zjišťování záměru: {e}")
+            # Parsování odpovědi (očekáváme "QUERIES: app1;app2...")
+            if "QUERIES:" in raw_intent:
+                clean_line = raw_intent.replace("QUERIES:", "").strip()
+                # Rozdělíme středníkem a vyčistíme
+                search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
+            else:
+                # Fallback, kdyby AI neodpověděla správně
                 search_terms = [user_request]
-
-            # ---------------------------------------------------------
-            # 2. KROK: Hromadné hledání přes API (WINGET.RUN)
-            # ---------------------------------------------------------
-            
-            # Nastavení progress baru (pokud existuje)
-            if hasattr(self, 'progress'):
-                self.progress['maximum'] = len(search_terms) * 100
-            
-            combined_results = []
-            
-            print(f"Hledám termíny přes API: {search_terms}")
-            for term in search_terms:
-                # Volání API
-                try:
-                    # Předpokládáme, že WingetRunAPI vrací seznam dictů [{'Name':..., 'Id':...}, ...]
-                    api_results = WingetRunAPI.search(term, limit=5) 
-                    if api_results:
-                        combined_results.extend(api_results)
-                except Exception as e:
-                    print(f"Chyba při API hledání termínu '{term}': {e}")
                 
-                # Posun progress baru
-                # if hasattr(self, 'current_prog'): self.current_prog += 100 
+            print(f"AI navrhlo hledat tyto výrazy: {search_terms}")
 
-            # ---------------------------------------------------------
-            # 3. KROK: Finální filtrace (s robustním Fallbackem)
-            # ---------------------------------------------------------
-            
-            # Převedeme data pro AI
-            combined_output_str = json.dumps(combined_results, indent=2, ensure_ascii=False)
-            
-            # Prompt (zkráceno pro přehlednost - použijte ten z předchozí odpovědi)
-            filter_prompt = f"""
-            Jsi striktní filtr. Uživatel hledal: "{user_request}"
-            Surová data: {combined_output_str}
-            
-            INSTRUKCE:
-            1. Najdi přesnou shodu. Pokud uživatel chce "Steam", ignoruj "Steam ROM Manager".
-            2. Extrahuj name, id, version.
-            3. Výstup pouze JSON pole.
-            """
+        except Exception as e:
+            print(f"Chyba při zjišťování záměru: {e}")
+            search_terms = [user_request]
 
+        # 2. KROK: Hromadné hledání ve Winget
+        # Spustíme hledání pro každý výraz, který AI navrhlo
+        combined_output = ""
+        
+        self.progress['maximum'] = len(search_terms) * 100
+        current_prog = 0
+        
+        for term in search_terms:
             try:
-                # Pokusíme se zavolat AI
-                response = model.generate_content(filter_prompt)
-                raw_text = response.text
-                json_str = raw_text.replace("```json", "").replace("```", "").strip()
+                # Omezíme výsledky (-n 3) aby toho nebylo moc pro další AI analýzu
+                cmd = f'winget search "{term}" --source winget --accept-source-agreements -n 3'
                 
-                json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
-                data = []
-                if json_match:
-                    data = json.loads(json_match.group(0))
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 
-                for item in data:
-                    if not item.get('version') or item['version'] == "Latest":
-                        item['version'] = "Latest/Unknown"
-
-                self.controller.after(0, self.display_search_results, data)
-
+                print(f"Spouštím Winget pro: {term}")
+                result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
+                
+                # Přidáme výstup do jednoho velkého textu
+                combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n"
+                combined_output += result.stdout
+                
             except Exception as e:
-                # Tady nastala ta chyba 429. Nyní spustíme BEZPEČNÝ Fallback.
-                print(f"⚠️ AI nedostupné (Quota/Error): {e}")
-                print("Spouštím záchranný režim (zobrazení surových dat)...")
+                print(f"Winget search selhal pro {term}: {e}")
+            
+            # Aktualizace progress baru (jen vizuálně)
+            current_prog += 100
+            # V threadu nemůžeme přímo měnit GUI bezpečně, ale u jednoduchých proměnných to v Tkinteru často projde. 
+            # Správnější by bylo frontování, ale pro jednoduchost necháme běžet.
 
-                formatted_fallback = []
-                seen_ids = set()
+        # 3. KROK: Finální filtrace a formátování na JSON
+        # Teď máme "špinavý" výstup z několika hledání, AI z toho musí vytáhnout to důležité.
+        
+        filter_prompt = f"""
+        Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
+        Původní dotaz uživatele byl: "{user_request}"
+        
+        SUROVÁ DATA Z WINGET:
+        '''
+        {combined_output}
+        '''
 
-                for item in combined_results:
-                    # 1. Bezpečné získání ID (zkoušíme různé varianty klíčů)
-                    # WingetRun API vrací někdy 'id', někdy 'Id', někdy 'packageId'
-                    p_id = item.get('id') or item.get('Id') or item.get('packageId')
-                    
-                    # 2. Bezpečné získání Názvu
-                    p_name = item.get('name') or item.get('Name') or p_id or "Unknown"
-                    
-                    # 3. Bezpečné získání Verze
-                    p_version = item.get('version') or item.get('Version') or "Latest"
+        INSTRUKCE:
+        1. Analyzuj surová data a najdi aplikace, které odpovídají záměru uživatele.
+        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace. (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu). Pokud se budou nacházet dvě verze určitého programu např. GIMP má z nějakého důvodu ve wingetu 2 verze, vždy vyber tu novější.
+        3. Extrahuj Název, ID a Verzi.
+        4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace (např. jsi ji sám navrhl v předchozím kroku), pokus se ID odhadnout (např. 'Mozilla.Firefox').
+        
+        VÝSTUPNÍ FORMÁT (čistý JSON pole):
+        [
+            {{ 
+                "name": "Název aplikace", 
+                "id": "Přesné.ID", 
+                "version": "verze (nebo 'Latest')", 
+                "website": "domena.com" 
+            }}
+        ]
+        """
 
-                    # Pokud se nepovedlo najít ID, položku přeskočíme
-                    if not p_id:
-                        continue
+        try:
+            response = model.generate_content(filter_prompt)
+            raw_text = response.text
+            # Očištění o markdown bloky
+            json_str = raw_text.replace("```json", "").replace("```", "").strip()
+            
+            # Extrakce JSONu pomocí regexu pro jistotu
+            json_match = re.search(r'\[.*\]', json_str, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+            else:
+                data = []
 
-                    # Deduplikace podle ID
-                    if p_id in seen_ids:
-                        continue
-                    seen_ids.add(p_id)
+            # Validace verzí (stejné jako předtím)
+            for item in data:
+                if not item.get('version') or item['version'] == "Latest":
+                     # Zde bychom mohli volat get_real_version, ale pro rychlost to necháme být
+                     # nebo to voláme jen když je to nutné.
+                     item['version'] = "Latest/Unknown"
 
-                    formatted_fallback.append({
-                        "name": p_name,
-                        "id": p_id,
-                        "version": p_version,
-                        "website": "" 
-                    })
-                
-                # Zobrazíme co máme, i když AI nefunguje
-                self.controller.after(0, self.display_search_results, formatted_fallback)
-                
-        except Exception as glob_e:
-            print(f"Kritická chyba ve vlákně: {glob_e}")
+            self.controller.after(0, self.display_search_results, data)
+
+        except Exception as e:
+            print(f"Chyba při finálním parsování: {e}")
+            self.controller.after(0, lambda: messagebox.showerror("Chyba AI", f"Chyba zpracování.\nDetail: {e}"))
             self.controller.after(0, self.stop_loading_animation)
 
     def stop_loading_animation(self):
@@ -705,3 +441,354 @@ class PlaceholderPage(tk.Frame):
         tk.Label(center_frame, text=icon_emoji, font=("Segoe UI Emoji", 48), bg=COLORS['bg_main']).pack(pady=(0, 20))
         tk.Label(center_frame, text=f"Vítejte v {title}", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack()
         tk.Label(center_frame, text="Vyberte akci z menu vlevo", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(pady=(5, 20))
+
+# --- PŘIDAT NA KONEC SOUBORU views.py ---
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+# views.py (část)
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+# views.py (část - nahraď třídu HealthCheckPage)
+
+class HealthCheckPage(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS['bg_main'])
+        self.controller = controller
+        
+        # 1. Hlavní nadpis
+        header = tk.Frame(self, bg=COLORS['bg_main'], pady=20, padx=20)
+        header.pack(fill='x')
+        tk.Label(header, text="Windows Health & Maintenance", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack(side="left")
+
+        # 2. Kontejner pro obsah
+        content = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        content.pack(fill='both', expand=True)
+
+        # --- LEVÝ PANEL (Ovládání) ---
+        controls = tk.Frame(content, bg=COLORS['bg_sidebar'], padx=15, pady=15)
+        controls.pack(side="left", fill="y", padx=(0, 20))
+        
+        # Sekce Opravy Systému (Zůstává, to je základ zdraví PC)
+        tk.Label(controls, text="Opravy Systému", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['accent']).pack(anchor="w", pady=(0, 10))
+
+        self.create_tool_row(controls, "🔍", "SFC Scan", 
+                             "sfc /scannow", 
+                             "Kontrola integrity souborů (SFC)...",
+                             "System File Checker (SFC).\nSkenuje integritu všech chráněných systémových souborů\na nahrazuje poškozené verze kopií z mezipaměti.\nZákladní první krok při opravě systému.")
+
+        self.create_tool_row(controls, "💾", "CHKDSK Scan (Disk)", 
+                             "chkdsk C: /scan", 
+                             "Online kontrola disku (CHKDSK)...",
+                             "Check Disk (Scan Mode).\nZkontroluje logickou strukturu souborového systému (NTFS)\na hledá chyby na disku C:.\nBěží za chodu Windows bez nutnosti restartu.")
+
+        self.create_tool_row(controls, "🩺", "DISM Check Health", 
+                             "dism /online /cleanup-image /CheckHealth", 
+                             "Rychlá kontrola obrazu (DISM)...",
+                             "DISM (CheckHealth).\nPouze zkontroluje, zda byl obraz systému označen jako poškozený.\nNeprovádí žádné opravy, slouží jen k rychlé diagnostice.")
+
+        self.create_tool_row(controls, "🛠️", "DISM Restore Health", 
+                             "dism /online /cleanup-image /RestoreHealth", 
+                             "Hloubková oprava obrazu (DISM)...",
+                             "DISM (RestoreHealth).\nPokročilá oprava obrazu Windows.\nStáhne funkční soubory z Windows Update a opraví poškozené\nkomponenty, které SFC nedokázal vyřešit.")
+        
+        # Sekce Správa PC (NOVÉ - Místo sítě a wingetu)
+        tk.Label(controls, text="Správa PC a Údržba", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['accent']).pack(anchor="w", pady=(20, 10))
+        
+        self.create_tool_row(controls, "🗑️", "Smazat Temp soubory", 
+                             'del /q/f/s %TEMP%\\*', 
+                             "Mazání dočasných souborů uživatele...",
+                             "Temp Cleaner.\nBezpečně vymaže obsah složky %TEMP%.\nOdstraní zbytečné soubory po instalacích a cache aplikací.\n(Soubory, které systém právě používá, budou přeskočeny).")
+
+        self.create_tool_row(controls, "💿", "Vyčištění Disku (Windows)", 
+                             "cleanmgr.exe", 
+                             "Spouštění nástroje Vyčištění disku...",
+                             "Windows Disk Cleanup.\nSpustí oficiální nástroj Windows pro uvolnění místa.\nUmožní smazat Koš, miniatury, logy a staré aktualizace.")
+
+        self.create_tool_row(controls, "🔋", "Report Baterie (Laptop)", 
+                             "powercfg /batteryreport /output \"C:\\battery_report.html\"", 
+                             "Generování reportu baterie...",
+                             "PowerCfg Battery Report.\nVygeneruje detailní HTML report o zdraví baterie notebooku.\nSoubor bude uložen přímo na disk C:\\battery_report.html\n(Obsahuje historii nabíjení a reálnou kapacitu).")
+        
+        self.create_tool_row(controls, "🧹", "WinSxS Cleanup (Deep)", 
+                             "dism /online /cleanup-image /StartComponentCleanup", 
+                             "Hloubkové čištění systémových záloh...",
+                             "Component Cleanup.\nAnalyzuje složku WinSxS a odstraňuje staré verze\naktualizací Windows, které již nejsou potřeba.\nUvolní místo na disku, ale znemožní odinstalaci aktualizací.")
+
+        # --- PRAVÝ PANEL (Log výstup) ---
+        log_frame = tk.Frame(content, bg=COLORS['bg_main'])
+        log_frame.pack(side="right", fill="both", expand=True)
+
+        tk.Label(log_frame, text="Průběh operace:", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(anchor="w", pady=(0, 5))
+
+        self.console = tk.Text(log_frame, bg="#0d0d0d", fg="#cccccc", font=("Consolas", 10), relief="flat", padx=10, pady=10, state="disabled")
+        self.console.pack(fill="both", expand=True)
+
+        try:
+            scrollbar = ModernScrollbar(log_frame, command=self.console.yview, bg=COLORS['bg_main'])
+            scrollbar.pack(side="right", fill="y", before=self.console)
+            self.console.config(yscrollcommand=scrollbar.set)
+        except: pass
+
+    def create_tool_row(self, parent, icon, title, command, log_desc, tooltip_text):
+        """Vytvoří řádek s perfektně zarovnaným 'tlačítkem' a ikonou lupy."""
+        row = tk.Frame(parent, bg=COLORS['bg_sidebar'])
+        row.pack(fill='x', pady=2)
+
+        # --- 1. KOMPLEXNÍ TLAČÍTKO ---
+        btn_frame = tk.Frame(row, bg=COLORS['input_bg'], cursor="hand2", height=35)
+        btn_frame.pack(side="left", fill="y")
+        btn_frame.pack_propagate(False) 
+        btn_frame.configure(width=280)  
+
+        # Ikona 
+        lbl_icon = tk.Label(btn_frame, text=icon, font=("Segoe UI Emoji", 11), 
+                            bg=COLORS['input_bg'], fg="white", width=4, cursor="hand2")
+        lbl_icon.pack(side="left", fill="y")
+
+        # Text
+        lbl_text = tk.Label(btn_frame, text=title, font=("Segoe UI", 10), 
+                            bg=COLORS['input_bg'], fg="white", anchor="w", cursor="hand2")
+        lbl_text.pack(side="left", fill="both", expand=True)
+
+        # Logika kliknutí
+        def on_click(e): self.run_command(command, log_desc)
+        
+        btn_frame.bind("<Button-1>", on_click)
+        lbl_icon.bind("<Button-1>", on_click)
+        lbl_text.bind("<Button-1>", on_click)
+
+        # Hover efekt
+        widgets_to_color = [btn_frame, lbl_icon, lbl_text]
+        
+        def on_btn_enter(e): 
+            for w in widgets_to_color: w.config(bg=COLORS['item_hover'])
+        def on_btn_leave(e): 
+            for w in widgets_to_color: w.config(bg=COLORS['input_bg'])
+
+        for w in widgets_to_color:
+            w.bind("<Enter>", on_btn_enter)
+            w.bind("<Leave>", on_btn_leave)
+
+
+        # --- 2. Info ikona (Lupa) ---
+        base_font = ("Segoe UI Emoji", 12)
+
+        info_lbl = tk.Label(row, text="🔍", font=base_font, 
+                            bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'], cursor="hand2")
+        info_lbl.pack(side="left", padx=(8, 0)) 
+        
+        # Tooltip logika
+        info_lbl.tooltip_win = None
+        info_lbl.timer_id = None
+
+        def show_tooltip():
+            if info_lbl.tooltip_win: return
+            x, y, cx, cy = info_lbl.bbox("insert")
+            x += info_lbl.winfo_rootx() + 30
+            y += info_lbl.winfo_rooty() + 10
+            
+            tw = tk.Toplevel(info_lbl)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            
+            label = tk.Label(tw, text=tooltip_text, justify='left',
+                           background="#2d2d2d", foreground="#ffffff",
+                           relief='solid', borderwidth=1,
+                           font=("Segoe UI", 9), padx=8, pady=5)
+            label.pack()
+            info_lbl.tooltip_win = tw
+
+        def on_info_enter(e):
+            info_lbl.config(fg=COLORS['accent'])
+            info_lbl.timer_id = info_lbl.after(400, show_tooltip)
+
+        def on_info_leave(e):
+            info_lbl.config(fg=COLORS['sub_text'])
+            if info_lbl.timer_id:
+                info_lbl.after_cancel(info_lbl.timer_id)
+                info_lbl.timer_id = None
+            if info_lbl.tooltip_win:
+                info_lbl.tooltip_win.destroy()
+                info_lbl.tooltip_win = None
+            
+        info_lbl.bind("<Enter>", on_info_enter)
+        info_lbl.bind("<Leave>", on_info_leave)
+
+        return row
+
+    def log(self, text):
+        self.console.config(state="normal")
+        self.console.insert(tk.END, text + "\n")
+        self.console.see(tk.END)
+        self.console.config(state="disabled")
+
+    def run_command(self, cmd, description):
+        self.console.config(state="normal")
+        self.console.delete(1.0, tk.END)
+        self.console.config(state="disabled")
+        
+        self.log(f"--- ZAHAJUJI: {description} ---")
+        self.log(f"Příkaz: {cmd}")
+        self.log("(Operace běží na pozadí, prosím čekejte...)\n")
+        
+        import threading
+        import subprocess
+        threading.Thread(target=self._execute_thread, args=(cmd,), daemon=True).start()
+
+    def _execute_thread(self, cmd):
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            # Použijeme cmd.exe /c pro složitější příkazy (jako del)
+            if cmd.startswith("del"):
+                 full_cmd = f"cmd /c {cmd}"
+            else:
+                 full_cmd = f"chcp 65001 > nul && {cmd}"
+
+            process = subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                       shell=True, text=True, encoding="utf-8", errors="replace", 
+                                       startupinfo=startupinfo)
+            
+            while True:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    break
+                if line:
+                    self.controller.after(0, lambda l=line.strip(): self.log(l))
+            
+            rc = process.poll()
+            if rc == 0:
+                self.controller.after(0, lambda: self.log("\n✅ HOTOVO: Operace dokončena úspěšně."))
+            else:
+                self.controller.after(0, lambda: self.log(f"\n❌ CHYBA (Kód {rc}).\nUjistěte se, že je aplikace spuštěna jako SPRÁVCE."))
+                
+        except Exception as e:
+            self.controller.after(0, lambda: self.log(f"Kritická chyba: {e}"))
+
+class SettingsPage(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, bg=COLORS['bg_main'])
+        self.controller = controller
+        
+        # Načtení aktuálního klíče
+        self.settings = SettingsManager.load_settings()
+        current_key = self.settings.get("api_key", "")
+
+        # 1. Hlavní nadpis
+        header = tk.Frame(self, bg=COLORS['bg_main'], pady=20, padx=20)
+        header.pack(fill='x')
+        tk.Label(header, text="Uživatelské nastavení", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack(side="left")
+
+        # 2. Kontejner
+        content = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
+        content.pack(fill='both', expand=True)
+
+        # --- SEKCE API ---
+        api_frame = tk.Frame(content, bg=COLORS['bg_sidebar'], padx=20, pady=20)
+        api_frame.pack(fill='x', pady=(0, 20))
+
+        tk.Label(api_frame, text="Gemini API Klíč", font=("Segoe UI", 12, "bold"), bg=COLORS['bg_sidebar'], fg="white").pack(anchor="w")
+        tk.Label(api_frame, text="Pro fungování AI vyhledávání je potřeba Google Gemini API klíč.", font=("Segoe UI", 9), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", pady=(0, 10))
+
+        # Vstupní pole
+        entry_bg = tk.Frame(api_frame, bg=COLORS['input_bg'], padx=10, pady=5)
+        entry_bg.pack(fill='x')
+        
+        self.api_entry = tk.Entry(entry_bg, font=("Consolas", 11), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
+        self.api_entry.pack(fill='x')
+        self.api_entry.insert(0, current_key)
+
+        # Odkaz na získání klíče
+        link_lbl = tk.Label(api_frame, text="🔗 Získat API klíč zdarma (Google AI Studio)", font=("Segoe UI", 9, "underline"), bg=COLORS['bg_sidebar'], fg=COLORS['accent'], cursor="hand2")
+        link_lbl.pack(anchor="w", pady=(10, 5))
+        link_lbl.bind("<Button-1>", lambda e: webbrowser.open("https://aistudio.google.com/app/apikey"))
+
+        
+        # Tlačítka
+        btn_frame = tk.Frame(api_frame, bg=COLORS['bg_sidebar'])
+        btn_frame.pack(fill='x', pady=(20, 0))
+
+        # ZMĚNA: Barva 'bg' změněna na COLORS['accent']
+        save_btn = tk.Button(btn_frame, text="💾 Uložit klíč", command=self.save_key,
+                             bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"),
+                             relief="flat", padx=20, pady=8, cursor="hand2")
+        save_btn.pack(side="left")
+
+        # Přidání hover efektu pro modré tlačítko
+        def on_save_enter(e): save_btn.config(bg=COLORS['accent_hover'])
+        def on_save_leave(e): save_btn.config(bg=COLORS['accent'])
+        save_btn.bind("<Enter>", on_save_enter)
+        save_btn.bind("<Leave>", on_save_leave)
+
+        check_btn = tk.Button(btn_frame, text="⚡ Ověřit stav limitu", command=self.check_api_status,
+                             bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
+                             relief="flat", padx=20, pady=8, cursor="hand2")
+        check_btn.pack(side="left", padx=10)
+
+        # --- STATUS PANEL ---
+        self.status_frame = tk.Frame(content, bg=COLORS['bg_main'], pady=20)
+        self.status_frame.pack(fill='x')
+        self.status_label = tk.Label(self.status_frame, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'])
+        self.status_label.pack(anchor="w")
+
+    def save_key(self):
+        new_key = self.api_entry.get().strip()
+        self.settings["api_key"] = new_key
+        if SettingsManager.save_settings(self.settings):
+            # Okamžitě rekonfigurujeme AI
+            try:
+                genai.configure(api_key=new_key)
+                messagebox.showinfo("Úspěch", "API klíč byl uložen a aktivován.")
+            except Exception as e:
+                messagebox.showerror("Chyba", f"Klíč uložen, ale konfigurace selhala: {e}")
+        else:
+            messagebox.showerror("Chyba", "Nepodařilo se uložit nastavení.")
+
+    def check_api_status(self):
+        key = self.api_entry.get().strip()
+        if not key:
+            self.update_status("⚠️ Chybí API klíč.", "orange")
+            return
+
+        self.update_status("⏳ Ověřuji spojení s Google AI...", COLORS['sub_text'])
+        
+        # Spustíme test ve vlákně, aby nezamrzlo GUI
+        threading.Thread(target=self._test_connection_thread, args=(key,), daemon=True).start()
+
+    def _test_connection_thread(self, key):
+        try:
+            # Nakonfigurujeme dočasně pro test
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Pošleme miniaturní dotaz
+            response = model.generate_content("Hello", generation_config={"max_output_tokens": 5})
+            
+            if response and response.text:
+                self.controller.after(0, lambda: self.update_status("✅ Klíč je AKTIVNÍ. Limit je v pořádku.", COLORS['success']))
+            else:
+                self.controller.after(0, lambda: self.update_status("❌ Klíč se zdá neplatný (žádná odpověď).", COLORS['danger']))
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg:
+                msg = "⚠️ Limit vyčerpán (Quota Exceeded)."
+                color = "orange"
+            elif "400" in error_msg or "API key not valid" in error_msg:
+                msg = "❌ Neplatný API klíč."
+                color = COLORS['danger']
+            else:
+                msg = f"❌ Chyba spojení: {error_msg[:50]}..."
+                color = COLORS['danger']
+            
+            self.controller.after(0, lambda: self.update_status(msg, color))
+
+    def update_status(self, text, color):
+        self.status_label.config(text=text, fg=color)

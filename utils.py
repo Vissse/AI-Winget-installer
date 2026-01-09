@@ -2,10 +2,11 @@ import tkinter as tk
 import threading
 import requests
 import json
+import os
 from io import BytesIO
 from PIL import Image, ImageTk
 from urllib.parse import urlparse
-from config import COLORS
+from config import COLORS, SETTINGS_FILE
 
 # --- WINGET.RUN API ---
 class WingetRunAPI:
@@ -262,3 +263,23 @@ class ModernScrollbar(tk.Canvas):
 
     def on_enter(self, event): self.itemconfig(self.thumb, fill=self.hover_color)
     def on_leave(self, event): self.itemconfig(self.thumb, fill=self.thumb_color)
+
+class SettingsManager:
+    @staticmethod
+    def load_settings():
+        if not os.path.exists(SETTINGS_FILE):
+            return {"api_key": ""}
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {"api_key": ""}
+
+    @staticmethod
+    def save_settings(data):
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            return True
+        except:
+            return False
