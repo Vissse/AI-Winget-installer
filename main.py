@@ -10,8 +10,14 @@ from splash import SplashScreen
 from views import InstallerPage, UpdaterPage, PlaceholderPage, HealthCheckPage, SettingsPage
 from utils import SettingsManager
 
-# --- ODSTRANĚNO globální genai.configure(api_key=API_KEY) ---
-# Konfiguraci provedeme až uvnitř třídy po načtení settings
+import os
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 def is_admin():
     try:
@@ -45,7 +51,7 @@ class MainApplication(tk.Tk):
         # --- NASTAVENÍ HLAVNÍ IKONY ---
         try:
             # Zde zadejte přesný název souboru, který tam máte (např. program_icon_3.jpg nebo program_icon.png)
-            image_path = "program_icon.png" 
+            image_path = resource_path("program_icon.png")
             
             # 1. Načtení originálu
             original_image = Image.open(image_path)

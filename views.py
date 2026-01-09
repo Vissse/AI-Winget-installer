@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 from config import COLORS, OUTPUT_FILE
 from utils import ToolTip, ModernScrollbar, IconLoader, SettingsManager
 from install_manager import InstallationDialog
+from updater import GitHubUpdater
 
 class UpdaterPage(tk.Frame):
     def __init__(self, parent, controller):
@@ -740,6 +741,12 @@ class SettingsPage(tk.Frame):
         self.status_label = tk.Label(self.status_frame, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'])
         self.status_label.pack(anchor="w")
 
+        update_btn = tk.Button(btn_frame, text="🔄 Zkontrolovat update", 
+                             command=self.check_update,
+                             bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10),
+                             relief="flat", padx=20, pady=8, cursor="hand2")
+        update_btn.pack(side="left", padx=10)
+
     def save_key(self):
         new_key = self.api_entry.get().strip()
         self.settings["api_key"] = new_key
@@ -792,3 +799,7 @@ class SettingsPage(tk.Frame):
 
     def update_status(self, text, color):
         self.status_label.config(text=text, fg=color)
+
+    def check_update(self):
+        updater = GitHubUpdater(self)
+        threading.Thread(target=lambda: updater.check_for_updates(silent=False))
