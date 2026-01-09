@@ -11,7 +11,7 @@ import time
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "AI-Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV (podle screenshotů to není AI-Winget-Installer)
-CURRENT_VERSION = "4.3.11"      # Zvedněte verzi, až to budete vydávat
+CURRENT_VERSION = "4.3.12"      # Zvedněte verzi, až to budete vydávat
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
