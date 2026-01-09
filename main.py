@@ -32,8 +32,6 @@ class MainApplication(tk.Tk):
         self.withdraw() 
         self.title("AI Winget Installer")
 
-        updater = GitHubUpdater(self)
-        threading.Thread(target=lambda: updater.check_for_updates(silent=True), daemon=True).start()
         
         # --- FIX PRO TASKBAR IKONU ---
         try:
