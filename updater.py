@@ -12,7 +12,7 @@ import shutil
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-CURRENT_VERSION = "4.3.17"
+CURRENT_VERSION = "4.3.18"
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -140,21 +140,18 @@ class GitHubUpdater:
     def _perform_restart(self):
         try:
             current_exe = os.path.basename(sys.executable)
-            # Zajištění absolutní cesty, aby se předešlo problémům s pracovním adresářem
             current_exe_path = os.path.abspath(sys.executable)
             new_exe_name = "new_version.exe"
             
-            # Pokud neběžíme jako EXE (vývoj), fallback
-            if not current_exe.endswith(".exe"): 
+            # Fallback pro vývojové prostředí (kdy nejsme v EXE)
+            if not current_exe.lower().endswith(".exe"): 
                 current_exe = "AI_Winget_Installer.exe"
                 current_exe_path = os.path.abspath(current_exe)
 
-            # BAT skript:
-            # 1. Čeká na ukončení původního procesu
-            # 2. Smyčka maže starý soubor
-            # 3. Přesune nový soubor
-            # 4. KRITICKÉ: "set _MEIPASS2=" vymaže proměnnou JEN pro tento CMD a jeho potomky
-            # 5. Spustí novou aplikaci
+            # --- BAT SCRIPT FIX ---
+            # Zde je to kouzlo: příkaz "set _MEIPASS2=" vymaže proměnnou 
+            # POUZE pro tento CMD a procesy, které z něj vzniknou (start).
+            # Tím zajistíme, že nová aplikace o staré složce vůbec neví.
             bat_script = f"""
 @echo off
 chcp 65001 > nul
@@ -175,19 +172,19 @@ echo Spoustim novou verzi...
 set _MEIPASS2=
 start "" "{current_exe_path}"
 
-:: Úklid bat souboru
+:: Smazání sebe sama
 (goto) 2>nul & del "%~f0"
 """
-            # Uložíme BAT soubor
             bat_filename = "update_installer.bat"
             with open(bat_filename, "w", encoding="utf-8") as f:
                 f.write(bat_script)
 
-            # Spustíme BAT a zavřeme aplikaci
-            # Používáme creationflags pro skrytí okna (volitelné, teď necháme viditelné pro debug)
+            # Spuštění BAT souboru
+            # Důležité: Používáme creationflags, aby okno příkazového řádku nebylo rušivé,
+            # ale environment se předá správně.
             subprocess.Popen(bat_filename, shell=True)
             
-            # Okamžité ukončení
+            # Okamžité ukončení aktuálního procesu
             self.parent.quit()
             sys.exit()
 
