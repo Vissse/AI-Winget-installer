@@ -4,6 +4,7 @@ import os
 import sys
 import subprocess
 import tkinter as tk
+import random
 from tkinter import messagebox, ttk
 from packaging import version
 import threading
