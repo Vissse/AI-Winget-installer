@@ -1,12 +1,34 @@
 # config.py
+import os
+from pathlib import Path
 
 # ZDE JE NYNÍ VERZE APLIKACE
 CURRENT_VERSION = "4.3.32"
 
-# API_KEY = "..." 
+# --- NASTAVENÍ CESTY DO DOKUMENTŮ ---
+# Tímto zajistíme, že se nastavení uloží do C:/Users/Uzivatel/Documents/AI_Winget_Installer/
+# a neztratí se při aktualizaci nebo restartu.
+
+try:
+    # Získá cestu k dokumentům aktuálního uživatele
+    _docs_dir = Path.home() / "Documents" / "AI_Winget_Installer"
+    
+    # Pokud složka neexistuje, vytvoříme ji
+    _docs_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Nastavíme cesty k souborům do této složky
+    SETTINGS_FILE = str(_docs_dir / "user_settings.json")
+    OUTPUT_FILE = str(_docs_dir / "install_apps.bat")
+    
+except Exception as e:
+    # Záložní řešení, kdyby se nepovedlo získat cestu k dokumentům
+    print(f"Chyba při nastavování cesty: {e}")
+    SETTINGS_FILE = "user_settings.json"
+    OUTPUT_FILE = "install_apps.bat"
+
+
+# API a další konstanty
 DEFAULT_API_KEY = "" 
-SETTINGS_FILE = "user_settings.json"
-OUTPUT_FILE = "install_apps.bat"
 
 COLORS = {
     "bg_main": "#1e1e1e",
