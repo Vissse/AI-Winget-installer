@@ -1,3 +1,4 @@
+# updater.py
 import requests
 import os
 import sys
@@ -10,8 +11,8 @@ import shutil
 
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
-REPO_NAME = "Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV
-CURRENT_VERSION = "4.3.15"      # Zvedněte verzi
+REPO_NAME = "Winget-Installer"
+CURRENT_VERSION = "4.3.16"
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -71,7 +72,7 @@ class UpdateProgressDialog(tk.Toplevel):
                             percent = (downloaded / self.total_size) * 100
                             self.after(0, lambda p=percent: self.update_ui(p))
             
-            # 3. Kontrola velikosti (Ochrana proti corrupt souborům)
+            # 3. Kontrola velikosti
             if self.total_size > 0 and downloaded < self.total_size:
                 raise Exception("Stažený soubor je menší než očekáváno (chyba sítě).")
 
@@ -141,11 +142,9 @@ class GitHubUpdater:
             current_exe = os.path.basename(sys.executable)
             if not current_exe.endswith(".exe"): current_exe = "AI_Winget_Installer.exe"
 
-            # BAT skript:
-            # 1. Počká 2 sekundy
-            # 2. Smyčka zkouší smazat starý soubor (dokud to Windows nedovolí)
-            # 3. Přesune nový soubor
-            # 4. Spustí ho
+            # BAT skript s vylepšenou ochranou:
+            # 1. set _MEIPASS2= (Extra pojistka pro vyčištění prostředí v cmd)
+            # 2. start "" (Spustí novou aplikaci s vyčištěným prostředím)
             bat_script = f"""
 @echo off
 echo Cekam na ukonceni aplikace...
@@ -160,6 +159,7 @@ if exist "{current_exe}" (
 
 move "new_version.exe" "{current_exe}"
 echo Spoustim novou verzi...
+set _MEIPASS2=
 start "" "{current_exe}"
 del "%~f0"
 """

@@ -6,50 +6,63 @@ import tempfile
 import random
 from pathlib import Path
 import time
+import ctypes
 
 # ============================================================================
-# 🛡️ SAFE BOOT & MEI BACKUP LOGIC
+# 🛡️ KRITICKÁ SEKVENCE STARTU (PyInstaller Fix)
 # ============================================================================
-# Tato sekce zajišťuje stabilitu při auto-updatech a řeší problémy s PyInstallerem.
-# Viz: nový 1.txt a přiložené schéma.
+"""
+VYSVĚTLENÍ MEI MECHANISMU A PROBLÉMU S UPDATE (Dokumentace):
 
-# 1. OŠETŘENÍ PROSTŘEDÍ PRO UPDATE 
-# Pokud aplikace startuje jako nová verze (spuštěná starou verzí),
-# musíme smazat zděděnou cestu ke staré MEI složce, jinak spadneme na chybějících DLL.
+1. Princip:
+   Aplikace zabalená v PyInstalleru (--onefile) se při startu rozbalí do dočasné 
+   složky v %TEMP% (např. _MEI123456). Zde jsou DLL knihovny (python311.dll) a zdrojový kód.
+
+2. Problém (Environment Inheritance):
+   Při auto-update procesu stará verze (v1) spouští novou verzi (v2).
+   v1 předá v2 své proměnné prostředí, včetně '_MEIPASS2', která ukazuje na TEMP složku v1.
+
+3. Důsledek:
+   Nová verze v2 uvidí '_MEIPASS2', myslí si, že už je rozbalená, a pokusí se načíst 
+   knihovny ze staré složky v1.
+   - Pokud v1 používá Python 3.10 a v2 Python 3.11, v2 spadne (nenajde python311.dll).
+   - Pokud v1 právě maže svou TEMP složku (protože končí), v2 spadne (Access Denied).
+
+4. Řešení níže:
+   Okamžitě po startu (před importem UI) smažeme os.environ["_MEIPASS2"].
+   Tím donutíme novou verzi, aby si vytvořila VLASTNÍ čistou složku s aktuálními knihovnami.
+"""
+
+# 1. OŠETŘENÍ PROSTŘEDÍ PRO UPDATE
+# Musí být úplně první věcí v kódu!
 if "_MEIPASS2" in os.environ:
+    # Jsme pravděpodobně spuštěni starou verzí aplikace.
+    # Mažeme proměnnou, aby se PyInstaller choval jako při čistém startu.
     del os.environ["_MEIPASS2"]
 
-# 2. ZÁLOHA MEI SLOŽKY (Logika z obrázku)
-# Pokud běžíme jako zkompilované EXE (frozen), vytvoříme zálohu běžícího prostředí.
-# To zajistí, že pokud původní temp složku smaže systém nebo update proces,
-# aplikace má kam sáhnout pro kritické soubory.
+# 2. ZÁLOHA MEI SLOŽKY (Safe Boot)
+# Pojistka proti smazání běžících souborů externím čističem nebo chybou Windows.
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     try:
-        # Aktuální běžící složka (např. %TEMP%/_MEI123456)
         current_mei = Path(sys._MEIPASS)
-        
-        # Vytvoření bezpečné cesty (např. %TEMP%/AIWinget_Safe_MEI_8492)
+        # Vytvoříme unikátní záložní složku
         safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
         
-        # Pokud záloha neexistuje, vytvoříme ji
         if not safe_mei_path.exists():
-            # Použijeme copytree pro rekurzivní kopírování
+            # Zkopírujeme běžící prostředí do bezpečí
             shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
             
-        # (Volitelné) Přidáme záložní cestu do systémové PATH pro tento proces
-        # Kdyby se nenašlo DLL v originále, Windows se podívá sem.
+        # Přidáme záložní cestu do PATH, kdyby hlavní DLL zmizela
         os.environ["PATH"] += os.pathsep + str(safe_mei_path)
-        
     except Exception as e:
-        # Pokud se záloha nepovede (např. práva), jen vypíšeme chybu, ale aplikaci nezastavíme
-        print(f"Warning: Nepodařilo se vytvořit zálohu MEI: {e}")
+        # Pokud se záloha nepovede (např. antivirus), aplikaci nezastavujeme
+        pass
 
 # ============================================================================
-# HLAVNÍ APLIKACE
+# HLAVNÍ APLIKACE (UI a Logika)
 # ============================================================================
 
 import tkinter as tk
-import ctypes
 import threading
 from PIL import Image, ImageTk 
 from config import COLORS
@@ -61,7 +74,6 @@ from updater import CURRENT_VERSION, GitHubUpdater
 def resource_path(relative_path):
     """Získá cestu k souborům, funguje pro dev i pro PyInstaller exe."""
     try:
-        # PyInstaller vytvoří temp složku a uloží cestu do _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
@@ -89,20 +101,13 @@ class MainApplication(tk.Tk):
         # --- NASTAVENÍ HLAVNÍ IKONY ---
         try:
             image_path = resource_path("program_icon.png")
-            
-            # 1. Načtení originálu
             original_image = Image.open(image_path)
-            
-            # 2. Ikona pro lištu Windows (Taskbar)
             window_icon = ImageTk.PhotoImage(original_image)
             self.iconphoto(True, window_icon)
-
-            # 3. Ikona pro menu (Sidebar)
             resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
             self.app_icon = ImageTk.PhotoImage(resized_image)
-            
         except Exception as e:
-            print(f"Nepodařilo se načíst ikonu aplikace: {e}")
+            # print(f"Warning: Ikona nenalezena: {e}") # Pro debug
             if hasattr(self, 'app_icon'):
                 del self.app_icon
 
@@ -116,25 +121,29 @@ class MainApplication(tk.Tk):
 
         self.configure(bg=COLORS['bg_main'])
 
-        # VYNUCENÍ BARVY LIŠTY
+        # VYNUCENÍ TM🤴VÉ BARVY LIŠTY (Windows DWM)
         try:
             from ctypes import windll, byref, c_int
             self.update() 
             hwnd = windll.user32.GetParent(self.winfo_id())
+            # Helper pro převod HEX na ColorRef
             def hex_to_colorref(hex_str):
                 clean_hex = hex_str.lstrip('#')
                 r = int(clean_hex[0:2], 16)
                 g = int(clean_hex[2:4], 16)
                 b = int(clean_hex[4:6], 16)
                 return b | (g << 8) | (r << 16)
+                
             target_color = COLORS['bg_sidebar'] 
             title_color_ref = hex_to_colorref(target_color)
             text_color_ref = hex_to_colorref("#ffffff")
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(title_color_ref)), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(text_color_ref)), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)
-        except Exception as e:
-            print(f"Nepodařilo se obarvit lištu: {e}")
+            
+            # DWM atributy pro Windows 10/11
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(title_color_ref)), 4) # Caption Color
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(text_color_ref)), 4)  # Text Color
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)               # Dark Mode
+        except Exception:
+            pass
 
         # GRID ROZLOŽENÍ
         container = tk.Frame(self, bg=COLORS['bg_main'])
@@ -185,6 +194,7 @@ class MainApplication(tk.Tk):
         tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
 
         self.menu_buttons = {}
+        # Placeholder pro přehled
         tk.Button(self.sidebar, text="☰  Všechny aplikace", command=lambda: self.switch_view("all_apps"),
                   bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
                   relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))
@@ -210,6 +220,7 @@ class MainApplication(tk.Tk):
         self.views["health"] = HealthCheckPage(self.content_area, self)
         self.views["upcoming"] = PlaceholderPage(self.content_area, "Upcoming Updates", "📅")
         self.views["settings"] = SettingsPage(self.content_area, self)
+        self.views["all_apps"] = PlaceholderPage(self.content_area, "Všechny aplikace", "☰")
 
         self.current_view = None
         self.switch_view("installer")
