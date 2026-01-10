@@ -18,7 +18,6 @@ from config import CURRENT_VERSION
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-# CURRENT_VERSION = "..."  <-- TOTO JSME SMAZALI, UŽ SE NAČÍTÁ Z CONFIG.PY
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -50,9 +49,13 @@ class UpdateProgressDialog(tk.Toplevel):
     def download_thread(self):
         new_exe_name = "new_version.exe"
         try:
+            # OPRAVA SYNTAXE ZDE:
             if os.path.exists(new_exe_name):
-                try: os.remove(new_exe_name)
-                except: pass
+                try: 
+                    os.remove(new_exe_name)
+                except: 
+                    pass
+            
             response = requests.get(self.download_url, stream=True)
             downloaded = 0
             with open(new_exe_name, "wb") as f:
@@ -64,13 +67,20 @@ class UpdateProgressDialog(tk.Toplevel):
                         if self.total_size > 0:
                             percent = (downloaded / self.total_size) * 100
                             self.after(0, lambda p=percent: self.update_ui(p))
+            
             if self.total_size > 0 and downloaded < self.total_size:
                 raise Exception("Stažený soubor je menší než očekáváno.")
             self.after(0, self.on_success)
             self.after(0, self.destroy)
+            
         except Exception as e:
-            if os.path.exists(new_exe_name): try: os.remove(new_exe_name)
-            except: pass
+            # A ZDE TAKY:
+            if os.path.exists(new_exe_name): 
+                try: 
+                    os.remove(new_exe_name)
+                except: 
+                    pass
+            
             self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
             self.after(0, self.on_fail)
             self.after(0, self.destroy)
