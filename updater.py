@@ -12,7 +12,7 @@ import shutil
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-CURRENT_VERSION = "4.3.16"
+CURRENT_VERSION = "4.3.17"
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -140,34 +140,54 @@ class GitHubUpdater:
     def _perform_restart(self):
         try:
             current_exe = os.path.basename(sys.executable)
-            if not current_exe.endswith(".exe"): current_exe = "AI_Winget_Installer.exe"
+            # Zajištění absolutní cesty, aby se předešlo problémům s pracovním adresářem
+            current_exe_path = os.path.abspath(sys.executable)
+            new_exe_name = "new_version.exe"
+            
+            # Pokud neběžíme jako EXE (vývoj), fallback
+            if not current_exe.endswith(".exe"): 
+                current_exe = "AI_Winget_Installer.exe"
+                current_exe_path = os.path.abspath(current_exe)
 
-            # BAT skript s vylepšenou ochranou:
-            # 1. set _MEIPASS2= (Extra pojistka pro vyčištění prostředí v cmd)
-            # 2. start "" (Spustí novou aplikaci s vyčištěným prostředím)
+            # BAT skript:
+            # 1. Čeká na ukončení původního procesu
+            # 2. Smyčka maže starý soubor
+            # 3. Přesune nový soubor
+            # 4. KRITICKÉ: "set _MEIPASS2=" vymaže proměnnou JEN pro tento CMD a jeho potomky
+            # 5. Spustí novou aplikaci
             bat_script = f"""
 @echo off
+chcp 65001 > nul
 echo Cekam na ukonceni aplikace...
 timeout /t 2 /nobreak > nul
 
 :LOOP
-del "{current_exe}" 2>nul
-if exist "{current_exe}" (
+del "{current_exe_path}" 2>nul
+if exist "{current_exe_path}" (
     timeout /t 1 > nul
     goto LOOP
 )
 
-move "new_version.exe" "{current_exe}"
+echo Aktualizuji soubory...
+move /Y "{new_exe_name}" "{current_exe_path}" > nul
+
 echo Spoustim novou verzi...
 set _MEIPASS2=
-start "" "{current_exe}"
-del "%~f0"
+start "" "{current_exe_path}"
+
+:: Úklid bat souboru
+(goto) 2>nul & del "%~f0"
 """
-            with open("update_installer.bat", "w") as f:
+            # Uložíme BAT soubor
+            bat_filename = "update_installer.bat"
+            with open(bat_filename, "w", encoding="utf-8") as f:
                 f.write(bat_script)
 
             # Spustíme BAT a zavřeme aplikaci
-            subprocess.Popen("update_installer.bat", shell=True)
+            # Používáme creationflags pro skrytí okna (volitelné, teď necháme viditelné pro debug)
+            subprocess.Popen(bat_filename, shell=True)
+            
+            # Okamžité ukončení
             self.parent.quit()
             sys.exit()
 
