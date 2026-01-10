@@ -10,15 +10,15 @@ from pathlib import Path
 def perform_boot_checks():
     """
     Spustí kritické kontroly prostředí pro PyInstaller.
-    Řeší problém 'Failed to load Python DLL' čištěním proměnných prostředí.
     """
-    # 1. FIX PRO PYINSTALLER UPDATE (BOOTLOADER FIX)
-    # Odstraní 'jedovatou' proměnnou zděděnou od starého procesu
+    # --- KRITICKÁ OPRAVA PRO UPDATE (Podle dokumentace PyInstaller) ---
+    # Pokud stará verze nastavila _MEIPASS2 (vnucuje staré knihovny),
+    # musíme to smazat, aby si nová verze načetla své vlastní, správné verze.
+    # Toto řeší situace, kdy se bootloader chytí, ale Python by mohl být zmatený.
     if "_MEIPASS2" in os.environ:
-        os.environ.pop("_MEIPASS2", None)
+        del os.environ["_MEIPASS2"]
 
-    # 2. SAFE BOOT (Záloha prostředí)
-    # Pokud jsme v EXE, zálohujeme knihovny do Tempu pro případ nouze
+    # 2. SAFE BOOT (Záloha prostředí - volitelné, pro jistotu)
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         try:
             current_mei = Path(sys._MEIPASS)
@@ -27,13 +27,11 @@ def perform_boot_checks():
             if not safe_mei_path.exists():
                 shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
                 
-            # Přidáme zálohu do PATH
             os.environ["PATH"] += os.pathsep + str(safe_mei_path)
         except Exception:
             pass
 
 def resource_path(relative_path):
-    """Získá absolutní cestu ke zdrojům (funguje pro dev i EXE)."""
     try:
         base_path = sys._MEIPASS
     except Exception:
@@ -41,7 +39,6 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def is_admin():
-    """Ověří, zda aplikace běží s právy správce."""
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
     except:

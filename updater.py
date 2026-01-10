@@ -11,11 +11,8 @@ import shutil
 import tempfile
 import random
 from pathlib import Path
-
-# NOVÝ IMPORT Z CONFIGU
 from config import CURRENT_VERSION 
 
-# --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
@@ -50,10 +47,8 @@ class UpdateProgressDialog(tk.Toplevel):
         new_exe_name = "new_version.exe"
         try:
             if os.path.exists(new_exe_name):
-                try: 
-                    os.remove(new_exe_name)
-                except: 
-                    pass
+                try: os.remove(new_exe_name)
+                except: pass
             
             response = requests.get(self.download_url, stream=True)
             downloaded = 0
@@ -67,18 +62,13 @@ class UpdateProgressDialog(tk.Toplevel):
                             percent = (downloaded / self.total_size) * 100
                             self.after(0, lambda p=percent: self.update_ui(p))
             
-            if self.total_size > 0 and downloaded < self.total_size:
-                raise Exception("Stažený soubor je menší než očekáváno.")
+            if self.total_size > 0 and downloaded < self.total_size: raise Exception("Stažený soubor je menší než očekáváno.")
             self.after(0, self.on_success)
             self.after(0, self.destroy)
-            
         except Exception as e:
             if os.path.exists(new_exe_name): 
-                try: 
-                    os.remove(new_exe_name)
-                except: 
-                    pass
-            
+                try: os.remove(new_exe_name)
+                except: pass
             self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
             self.after(0, self.on_fail)
             self.after(0, self.destroy)
@@ -115,8 +105,7 @@ class GitHubUpdater:
 
     def _get_exe_info(self, release_data):
         for asset in release_data.get("assets", []):
-            if asset["name"].endswith(".exe") and "Setup" not in asset["name"]:
-                return asset["browser_download_url"], asset.get("size", 0)
+            if asset["name"].endswith(".exe") and "Setup" not in asset["name"]: return asset["browser_download_url"], asset.get("size", 0)
             elif asset["name"].endswith(".exe"): return asset["browser_download_url"], asset.get("size", 0)
         return None, 0
 
@@ -131,55 +120,41 @@ class GitHubUpdater:
         try:
             current_exe_path = Path(sys.executable).resolve()
             new_exe_path = Path("new_version.exe").resolve()
-            
-            # Pokud běžíme ze skriptu (vývoj), nastavíme dummy název
-            if not current_exe_path.name.lower().endswith(".exe"): 
-                current_exe_path = Path("AI_Winget_Installer.exe").resolve()
-
-            # --- BAT SKRIPT (NUCLEAR OPTION) ---
-            # Vytvoříme BAT soubor, který explicitně vymaže proměnné prostředí
-            # _MEIPASS2 a _MEIPASS těsně před spuštěním nové verze.
-            # Toto je jediný způsob, jak zabránit dědění cesty k temp složce.
-            
+            if not current_exe_path.name.lower().endswith(".exe"): current_exe_path = Path("AI_Winget_Installer.exe").resolve()
             bat_path = current_exe_path.parent / "updater_winget.bat"
             
+            # --- ZDE JE KLÍČOVÁ OPRAVA V BAT SOUBORU ---
+            # set _MEIPASS2=  -> Vymaže proměnnou pro tuto session cmd
             bat_content = f"""
 @echo off
 chcp 65001 > nul
 echo Cekam na ukonceni aplikace...
 timeout /t 2 /nobreak > nul
-
 :LOOP
 del "{str(current_exe_path)}" 2>nul
 if exist "{str(current_exe_path)}" (
     timeout /t 1 > nul
     goto LOOP
 )
-
 echo Aktualizuji...
 move /Y "{str(new_exe_path)}" "{str(current_exe_path)}" > nul
 
-echo Cistim prostredi...
+echo Cistim prostredi PyInstaller...
 set _MEIPASS2=
-set _MEIPASS=
 
 echo Spoustim novou verzi...
 start "" "{str(current_exe_path)}"
-
 (goto) 2>nul & del "%~f0"
 """
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
-
-            # Spustíme BAT soubor. Nepředáváme 'env' parametr, 
-            # protože spoléháme na 'set _MEIPASS2=' uvnitř BAT souboru.
+            with open(bat_path, "w", encoding="utf-8") as f: f.write(bat_content)
+            
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
+            # Spustíme BAT soubor. Důležité: env=None zajistí, že dědíme prostředí, 
+            # ALE bat soubor ho hned na řádku 'set _MEIPASS2=' vyčistí.
             subprocess.Popen(str(bat_path), shell=True, startupinfo=startupinfo)
             
             self.parent.quit()
             sys.exit()
-
-        except Exception as e:
-            messagebox.showerror("Chyba", f"Instalace selhala:\n{e}")
+        except Exception as e: messagebox.showerror("Chyba", f"Instalace selhala:\n{e}")
