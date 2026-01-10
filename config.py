@@ -1,7 +1,7 @@
 # config.py
 
 # ZDE JE NYNÍ VERZE APLIKACE
-CURRENT_VERSION = "4.3.30"
+CURRENT_VERSION = "4.3.31"
 
 # API_KEY = "..." 
 DEFAULT_API_KEY = "" 

@@ -4,14 +4,18 @@ import os
 import sys
 import subprocess
 import tkinter as tk
-import random
 from tkinter import messagebox, ttk
 from packaging import version
 import threading
-import tempfile # Potřeba pro práci s Temp složkou
+import shutil
+import tempfile
+import random
 from pathlib import Path
+
+# NOVÝ IMPORT Z CONFIGU
 from config import CURRENT_VERSION 
 
+# --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
@@ -45,8 +49,9 @@ class UpdateProgressDialog(tk.Toplevel):
         self.on_fail = on_fail
         self.is_downloading = True
         
-        # ZDE JE ZMĚNA: Stahujeme do dočasné složky
+        # FIX: Používáme systémový TEMP, aby soubory nestrašily na ploše
         self.temp_dir = tempfile.gettempdir()
+        # Používáme náhodné číslo, aby se soubory nehádaly
         self.target_temp_file = os.path.join(self.temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
         
         threading.Thread(target=self.download_thread, daemon=True).start()
@@ -131,26 +136,23 @@ class GitHubUpdater:
 
     def _perform_restart(self, downloaded_file_path):
         try:
-            # Cesta k aktuálně běžící aplikaci (tu chceme přepsat)
             current_exe_path = Path(sys.executable).resolve()
             
-            # Pokud běžíme ze skriptu (vývoj), jen simulujeme
             if not current_exe_path.name.lower().endswith(".exe"): 
                 messagebox.showinfo("Dev Mode", f"Staženo do:\n{downloaded_file_path}\n(V Pythonu nelze přepsat běžící skript)")
                 return
 
-            # Cesta pro BAT soubor - také do TEMPU, aby nebyl vidět na ploše
             temp_dir = tempfile.gettempdir()
-            bat_path = os.path.join(temp_dir, "ai_winget_updater.bat")
+            bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
             
-            # --- PROFESIONÁLNÍ BAT SKRIPT ---
-            # 1. Čeká
-            # 2. Smaže staré EXE
-            # 3. Přesune nové EXE z Tempu na původní místo
-            # 4. Vymaže _MEIPASS2 (řešení DLL chyby)
-            # 5. Spustí aplikaci
-            # 6. Smaže sám sebe (uklidí po sobě)
+            # --- PŘÍPRAVA ČISTÉHO PROSTŘEDÍ (NUCLEAR FIX) ---
+            # Vytvoříme kopii proměnných prostředí a násilně z ní odstraníme
+            # vše, co by mohlo zmást novou verzi (PyInstaller proměnné).
+            clean_env = os.environ.copy()
+            clean_env.pop('_MEIPASS2', None)
+            clean_env.pop('_MEIPASS', None)
             
+            # BAT skript
             bat_content = f"""
 @echo off
 chcp 65001 > nul
@@ -166,7 +168,10 @@ if exist "{str(current_exe_path)}" (
 
 move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
+echo Cleaning PyInstaller environment...
 set _MEIPASS2=
+set _MEIPASS=
+
 start "" "{str(current_exe_path)}"
 
 (goto) 2>nul & del "%~f0"
@@ -174,13 +179,13 @@ start "" "{str(current_exe_path)}"
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
-            # Spustíme BAT soubor skrytě (bez černého okna)
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            subprocess.Popen(str(bat_path), shell=True, startupinfo=startupinfo)
+            # SPOUŠTÍME S ČISTÝM PROSTŘEDÍM (env=clean_env)
+            # Toto je klíčová změna - BAT soubor ani neuvidí starou _MEIPASS2
+            subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
             
-            # Okamžitě ukončíme Python, aby BAT mohl smazat soubor
             self.parent.quit()
             sys.exit()
 
