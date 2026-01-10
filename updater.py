@@ -8,11 +8,14 @@ from tkinter import messagebox, ttk
 from packaging import version
 import threading
 import shutil
+import tempfile
+import random
+from pathlib import Path
 
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-CURRENT_VERSION = "4.3.18"
+CURRENT_VERSION = "4.3.19"
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -143,15 +146,45 @@ class GitHubUpdater:
             current_exe_path = os.path.abspath(sys.executable)
             new_exe_name = "new_version.exe"
             
-            # Fallback pro vývojové prostředí (kdy nejsme v EXE)
+            # Fallback pro vývojové prostředí
             if not current_exe.lower().endswith(".exe"): 
                 current_exe = "AI_Winget_Installer.exe"
                 current_exe_path = os.path.abspath(current_exe)
 
-            # --- BAT SCRIPT FIX ---
-            # Zde je to kouzlo: příkaz "set _MEIPASS2=" vymaže proměnnou 
-            # POUZE pro tento CMD a procesy, které z něj vzniknou (start).
-            # Tím zajistíme, že nová aplikace o staré složce vůbec neví.
+            # =================================================================
+            # 1. ZÁLOHA MEI (Tvůj Safe MEI Kód)
+            # =================================================================
+            # Vytvoříme odolnou kopii knihoven, která přežije vypnutí aplikace
+            safe_mei_path = None
+            try:
+                # Generování náhodné složky v Tempu
+                safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
+                
+                # Pokud běžíme v PyInstalleru (máme _MEIPASS)
+                if hasattr(sys, '_MEIPASS'):
+                    current_mei = Path(sys._MEIPASS)
+                    
+                    # Smažeme starou zálohu, pokud existuje
+                    if safe_mei_path.exists():
+                        shutil.rmtree(safe_mei_path, ignore_errors=True)
+                    
+                    # Kopírování
+                    print(f"Zalohuji MEI do: {safe_mei_path}")
+                    shutil.copytree(current_mei, safe_mei_path)
+            except Exception as copy_error:
+                print(f"Selhala záloha MEI: {copy_error}")
+                safe_mei_path = None # Označíme, že se to nepovedlo
+
+            # =================================================================
+            # 2. TVORBA BAT SKRIPTU
+            # =================================================================
+            
+            # Pokud se záloha povedla, přidáme ji do PATH v BAT souboru
+            # To je pojistka: kdyby aplikace nenašla DLL v nové složce, podívá se sem.
+            path_fix_cmd = ""
+            if safe_mei_path:
+                path_fix_cmd = f'set "PATH=%PATH%;{str(safe_mei_path)}"'
+
             bat_script = f"""
 @echo off
 chcp 65001 > nul
@@ -168,23 +201,27 @@ if exist "{current_exe_path}" (
 echo Aktualizuji soubory...
 move /Y "{new_exe_name}" "{current_exe_path}" > nul
 
-echo Spoustim novou verzi...
+echo Nastavuji prostredi...
+:: 1. Smazeme starou MEIPASS2 (aby se PyInstaller nepletl)
 set _MEIPASS2=
+
+:: 2. Pridame nasi zalohu do PATH (pojistka proti DLL erroru)
+{path_fix_cmd}
+
+echo Spoustim novou verzi...
 start "" "{current_exe_path}"
 
-:: Smazání sebe sama
+:: Úklid
 (goto) 2>nul & del "%~f0"
 """
             bat_filename = "update_installer.bat"
             with open(bat_filename, "w", encoding="utf-8") as f:
                 f.write(bat_script)
 
-            # Spuštění BAT souboru
-            # Důležité: Používáme creationflags, aby okno příkazového řádku nebylo rušivé,
-            # ale environment se předá správně.
+            # Spuštění
             subprocess.Popen(bat_filename, shell=True)
             
-            # Okamžité ukončení aktuálního procesu
+            # Ukončení
             self.parent.quit()
             sys.exit()
 
