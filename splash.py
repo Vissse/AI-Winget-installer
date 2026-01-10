@@ -1,11 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
 import random
-from config import COLORS
-from updater import CURRENT_VERSION 
+from config import COLORS, CURRENT_VERSION  # <--- ZMĚNA ZDE
 
 class SplashScreen(tk.Toplevel):
-    # PŘIDÁNO: on_complete
     def __init__(self, parent, on_complete=None):
         super().__init__(parent)
         self.on_complete = on_complete 
@@ -22,6 +20,7 @@ class SplashScreen(tk.Toplevel):
         main_frame.pack(fill='both', expand=True)
 
         tk.Label(main_frame, text="AI Winget Installer", font=("Segoe UI", 22, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(pady=(50, 5))
+        # Zde se používá proměnná z config.py
         tk.Label(main_frame, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
 
         self.loading_label = tk.Label(main_frame, text="Inicializace...", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
@@ -44,7 +43,6 @@ class SplashScreen(tk.Toplevel):
             increment = random.randint(1, 4)
             self.progress_val += increment
             self.progress['value'] = self.progress_val
-            # ... (logika textu loading_steps zůstává stejná) ...
             if self.progress_val > 20 and self.step_index == 0:
                 self.step_index = 1
                 self.loading_label.config(text=self.loading_steps[1])
@@ -62,7 +60,6 @@ class SplashScreen(tk.Toplevel):
 
     def close_splash(self):
         self.destroy()
-        # Pokud máme callback, zavoláme ho (místo deiconify)
         if self.on_complete:
             self.on_complete()
         else:

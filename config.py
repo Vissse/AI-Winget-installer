@@ -1,7 +1,10 @@
 # config.py
 
-# API_KEY = "..."  <-- TOTO UŽ NEBUDEME POUŽÍVAT NATVRDO
-DEFAULT_API_KEY = "" # Může zůstat prázdné
+# ZDE JE NYNÍ VERZE APLIKACE
+CURRENT_VERSION = "4.3.24"
+
+# API_KEY = "..." 
+DEFAULT_API_KEY = "" 
 SETTINGS_FILE = "user_settings.json"
 OUTPUT_FILE = "install_apps.bat"
 

@@ -12,10 +12,13 @@ import tempfile
 import random
 from pathlib import Path
 
+# NOVÝ IMPORT Z CONFIGU
+from config import CURRENT_VERSION 
+
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-CURRENT_VERSION = "4.3.21"
+# CURRENT_VERSION = "..."  <-- TOTO JSME SMAZALI, UŽ SE NAČÍTÁ Z CONFIG.PY
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
@@ -118,16 +121,13 @@ class GitHubUpdater:
 
     def _perform_restart(self):
         try:
-            # 1. Definice cest (podle vzoru Path)
             current_exe_path = Path(sys.executable).resolve()
             new_exe_path = Path("new_version.exe").resolve()
             
-            # Fallback pro vývoj
             if not current_exe_path.name.lower().endswith(".exe"): 
                 current_exe_path = Path("AI_Winget_Installer.exe").resolve()
 
-            # 2. ZÁLOHA MEI (IMPLEMENTACE KÓDU "STRUH")
-            # ----------------------------------------------------------------
+            # --- ZÁLOHA MEI ---
             safe_mei_path = Path(tempfile.gettempdir()) / f"Winget_Safe_MEI_{random.randint(1000, 99999)}"
             
             if hasattr(sys, '_MEIPASS'):
@@ -135,29 +135,20 @@ class GitHubUpdater:
                 try:
                     if safe_mei_path.exists():
                         shutil.rmtree(safe_mei_path, ignore_errors=True)
-                    # Zde probíhá kritické kopírování knihoven
                     shutil.copytree(current_mei, safe_mei_path)
-                    print(f"MEI zalohovano: {safe_mei_path}")
                 except Exception as e:
                     print(f"Chyba zalohy MEI: {e}")
-            # ----------------------------------------------------------------
 
-            # 3. Příprava BAT skriptu
+            # --- BAT SKRIPT ---
             bat_path = current_exe_path.parent / "updater_winget.bat"
             
-            # 4. Injekce záložní cesty do PATH
-            # Toto zajistí, že až se BAT spustí, bude vědět, kde hledat python dll
             clean_env = os.environ.copy()
-            
-            # Smazat jedovatou proměnnou
             if "_MEIPASS2" in clean_env:
                 del clean_env["_MEIPASS2"]
                 
-            # Přidat naši zálohu do PATH (pro jistotu na začátek)
             if safe_mei_path.exists():
                 clean_env["PATH"] = str(safe_mei_path) + os.pathsep + clean_env.get("PATH", "")
 
-            # Obsah BAT souboru
             bat_content = f"""
 @echo off
 chcp 65001 > nul
@@ -182,8 +173,6 @@ start "" "{str(current_exe_path)}"
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
-            # 5. Spuštění s upraveným prostředím (env=clean_env)
-            # Tím předáme BAT souboru znalost o tom, kde je naše záloha (safe_mei_path)
             subprocess.Popen(str(bat_path), shell=True, env=clean_env)
             
             self.parent.quit()
