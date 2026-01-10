@@ -9,26 +9,32 @@ import time
 import ctypes
 
 # ============================================================================
-# 🛡️ KRITICKÁ FIXACE PRO PYINSTALLER UPDATE
+# 🛡️ KRITICKÁ FIXACE PRO PYINSTALLER UPDATE (BOOTLOADER FIX)
 # ============================================================================
-# Tento kód řeší problém, kdy nová verze aplikace dědí cestu k TEMP složce
-# staré verze (přes proměnnou _MEIPASS2). To způsobuje pád při startu,
-# protože stará složka neobsahuje správné DLL knihovny pro novou verzi.
-# Smazáním této proměnné donutíme PyInstaller vytvořit si vlastní, čisté prostředí.
+# Pokud aplikace startuje po update procesu, musíme zajistit, že nevidí
+# staré proměnné prostředí, které by ji navedly do smazané složky Temp.
 if "_MEIPASS2" in os.environ:
-    del os.environ["_MEIPASS2"]
+    os.environ.pop("_MEIPASS2", None)
 
 # ============================================================================
 # SAFE BOOT (Záloha prostředí)
 # ============================================================================
+# Tento blok se snaží zachránit situaci, pokud DLL nelze najít, zkopírováním
+# aktuálního prostředí. Běží pouze v zkompilovaném EXE (frozen).
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     try:
         current_mei = Path(sys._MEIPASS)
+        # Unikátní název pro tuto relaci, aby se nekolidovalo
         safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
+        
+        # Kopírujeme pouze pokud ještě neexistuje (rychlost)
         if not safe_mei_path.exists():
             shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
+            
+        # Přidáme do PATH, aby Windows našel DLL pokud selže standardní cesta
         os.environ["PATH"] += os.pathsep + str(safe_mei_path)
     except Exception:
+        # Pokud se záloha nepovede (např. práva), ignorujeme to a doufáme, že bootloader funguje
         pass
 
 # ============================================================================
@@ -45,6 +51,7 @@ from utils import SettingsManager
 from updater import CURRENT_VERSION, GitHubUpdater
 
 def resource_path(relative_path):
+    """Získá absolutní cestu ke zdrojům, funguje pro dev i pro PyInstaller"""
     try:
         base_path = sys._MEIPASS
     except Exception:
@@ -60,26 +67,31 @@ def is_admin():
 class MainApplication(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.withdraw() 
+        self.withdraw() # Skryjeme okno během načítání
         self.title("AI Winget Installer")
         
+        # Nastavení AppID pro hlavní panel Windows (aby se ikona neshlukovala s Pythonem)
         try:
             myappid = 'mycompany.aiwinget.installer.v4'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception:
             pass
 
+        # Načtení ikony okna
         try:
             image_path = resource_path("program_icon.png")
-            original_image = Image.open(image_path)
-            window_icon = ImageTk.PhotoImage(original_image)
-            self.iconphoto(True, window_icon)
-            resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
-            self.app_icon = ImageTk.PhotoImage(resized_image)
+            if os.path.exists(image_path):
+                original_image = Image.open(image_path)
+                window_icon = ImageTk.PhotoImage(original_image)
+                self.iconphoto(True, window_icon)
+                # Uložíme si malou verzi pro UI
+                resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
+                self.app_icon = ImageTk.PhotoImage(resized_image)
         except Exception as e:
-            if hasattr(self, 'app_icon'):
-                del self.app_icon
+            # Pokud ikona chybí, nevadí, použije se defaultní
+            pass
 
+        # Geometrie okna
         w = 1175
         h = 750
         ws = self.winfo_screenwidth()
@@ -90,6 +102,7 @@ class MainApplication(tk.Tk):
 
         self.configure(bg=COLORS['bg_main'])
 
+        # Dark Mode Title Bar (Windows 10/11 hack)
         try:
             from ctypes import windll, byref, c_int
             self.update() 
@@ -111,12 +124,14 @@ class MainApplication(tk.Tk):
         except Exception:
             pass
 
+        # --- LAYOUT ---
         container = tk.Frame(self, bg=COLORS['bg_main'])
         container.pack(fill='both', expand=True)
         container.grid_columnconfigure(0, weight=0, minsize=250) 
         container.grid_columnconfigure(1, weight=1)              
         container.grid_rowconfigure(0, weight=1)
 
+        # SIDEBAR
         self.sidebar = tk.Frame(container, bg=COLORS['bg_sidebar'])
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
@@ -124,6 +139,7 @@ class MainApplication(tk.Tk):
         ver_label = tk.Label(self.sidebar, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
         ver_label.pack(side="bottom", pady=20)
 
+        # PROFIL
         profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15)
         profile_frame.pack(fill='x', side="top")
         
@@ -156,6 +172,7 @@ class MainApplication(tk.Tk):
 
         tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
 
+        # MENU
         self.menu_buttons = {}
         tk.Button(self.sidebar, text="☰  Všechny aplikace", command=lambda: self.switch_view("all_apps"),
                   bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
@@ -172,9 +189,11 @@ class MainApplication(tk.Tk):
         self.create_project_item("#  Winget Tools", 12)
         self.create_project_item("#  Gaming", 5)
 
+        # CONTENT AREA
         self.content_area = tk.Frame(container, bg=COLORS['bg_main'])
         self.content_area.grid(row=0, column=1, sticky="nsew")
         
+        # VIEWS
         self.views = {}
         self.views["installer"] = InstallerPage(self.content_area, self)
         self.views["updater"] = UpdaterPage(self.content_area, self)
@@ -186,9 +205,11 @@ class MainApplication(tk.Tk):
         self.current_view = None
         self.switch_view("installer")
         
+        # Spuštění Splash Screen a následná kontrola update
         SplashScreen(self, on_complete=self.run_startup_update_check)
 
     def run_startup_update_check(self):
+            # Kontrola update na pozadí po načtení UI
             updater = GitHubUpdater(self)
             threading.Thread(target=lambda: updater.check_for_updates(silent=True, on_continue=self.deiconify), daemon=True).start()
     
