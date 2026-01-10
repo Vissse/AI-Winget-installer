@@ -158,15 +158,55 @@ class HealthCheckPage(tk.Frame):
         try:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            if cmd.startswith("del"): full_cmd = f"cmd /c {cmd}"
-            else: full_cmd = f"chcp 65001 > nul && {cmd}"
-            process = subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True, encoding="utf-8", errors="replace", startupinfo=startupinfo)
+            
+            # 1. Změna: Odstraníme 'chcp 65001' a 'text=True'.
+            # Budeme číst surová data (bytes) a dekódovat je ručně.
+            # To často vyřeší problém, kdy Python čeká na naplnění bufferu.
+            
+            if cmd.startswith("del"): 
+                full_cmd = f"cmd /c {cmd}"
+            else: 
+                # Spustíme příkaz přímo, bez 'chcp'. Spoléháme na systémové kódování (cp852).
+                full_cmd = cmd 
+
+            process = subprocess.Popen(
+                full_cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT, 
+                shell=True, 
+                # bufsize=0 je klíčové pro vypnutí bufferování (jen pro binární režim)
+                bufsize=0,  
+                startupinfo=startupinfo
+            )
+            
+            # Čteme výstup znak po znaku nebo řádek po řádku
+            # Pro SFC/DISM je lepší číst řádky, i když progress bar (%) se ukáže až po dokončení řádku.
+            # Ale úvodní texty by se měly objevit hned.
+            
             while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None: break
-                if line: self.controller.after(0, lambda l=line.strip(): self.log(l))
+                # Přečteme řádek v bytech
+                line_bytes = process.stdout.readline()
+                
+                if not line_bytes and process.poll() is not None:
+                    break
+                
+                if line_bytes:
+                    # Ruční dekódování (cp852 pro česká Windows, jinak cp1250 nebo utf-8)
+                    try:
+                        # Zkusíme cp852 (DOS Latin 2 - standard pro CMD v CZ)
+                        decoded_line = line_bytes.decode('cp852', errors='replace').strip()
+                    except:
+                        # Fallback
+                        decoded_line = line_bytes.decode('utf-8', errors='replace').strip()
+                    
+                    if decoded_line:
+                        self.controller.after(0, lambda l=decoded_line: self.log(l))
+            
             rc = process.poll()
-            if rc == 0: self.controller.after(0, lambda: self.log("\n✅ HOTOVO: Operace dokončena úspěšně."))
-            else: self.controller.after(0, lambda: self.log(f"\n❌ CHYBA (Kód {rc}).\nUjistěte se, že je aplikace spuštěna jako SPRÁVCE."))
+            if rc == 0:
+                self.controller.after(0, lambda: self.log("\n✅ HOTOVO: Operace dokončena úspěšně."))
+            else:
+                self.controller.after(0, lambda: self.log(f"\n❌ CHYBA (Kód {rc}).\nUjistěte se, že je aplikace spuštěna jako SPRÁVCE."))
+                
         except Exception as e:
             self.controller.after(0, lambda: self.log(f"Kritická chyba: {e}"))
