@@ -1,108 +1,53 @@
 # main.py
-import sys
-import os
-import shutil
-import tempfile
-import random
-from pathlib import Path
-import time
-import ctypes
-
-# ============================================================================
-# 🛡️ KRITICKÁ FIXACE PRO PYINSTALLER UPDATE (BOOTLOADER FIX)
-# ============================================================================
-# Pokud aplikace startuje po update procesu, musíme zajistit, že nevidí
-# staré proměnné prostředí, které by ji navedly do smazané složky Temp.
-if "_MEIPASS2" in os.environ:
-    os.environ.pop("_MEIPASS2", None)
-
-# ============================================================================
-# SAFE BOOT (Záloha prostředí)
-# ============================================================================
-# Tento blok se snaží zachránit situaci, pokud DLL nelze najít, zkopírováním
-# aktuálního prostředí. Běží pouze v zkompilovaném EXE (frozen).
-if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    try:
-        current_mei = Path(sys._MEIPASS)
-        # Unikátní název pro tuto relaci, aby se nekolidovalo
-        safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
-        
-        # Kopírujeme pouze pokud ještě neexistuje (rychlost)
-        if not safe_mei_path.exists():
-            shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
-            
-        # Přidáme do PATH, aby Windows našel DLL pokud selže standardní cesta
-        os.environ["PATH"] += os.pathsep + str(safe_mei_path)
-    except Exception:
-        # Pokud se záloha nepovede (např. práva), ignorujeme to a doufáme, že bootloader funguje
-        pass
-
-# ============================================================================
-# HLAVNÍ APLIKACE
-# ============================================================================
-
 import tkinter as tk
 import threading
+import os
+import ctypes
 from PIL import Image, ImageTk 
-from config import COLORS
+
+# 1. BOOT CHECK (Musí být první)
+import boot_system
+boot_system.perform_boot_checks()
+
+# 2. KONFIGURACE A UTILS
+from config import COLORS, CURRENT_VERSION
 from splash import SplashScreen
-from views import InstallerPage, UpdaterPage, PlaceholderPage, HealthCheckPage, SettingsPage
-from utils import SettingsManager
-from updater import CURRENT_VERSION, GitHubUpdater
+from updater import GitHubUpdater
 
-def resource_path(relative_path):
-    """Získá absolutní cestu ke zdrojům, funguje pro dev i pro PyInstaller"""
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
-
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
+# 3. NAČTENÍ POHLEDŮ (VIEWS)
+from view_installer import InstallerPage
+from view_health import HealthCheckPage
+from view_settings import SettingsPage
+from view_other import UpdaterPage, PlaceholderPage
 
 class MainApplication(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.withdraw() # Skryjeme okno během načítání
+        self.withdraw() 
         self.title("AI Winget Installer")
         
-        # Nastavení AppID pro hlavní panel Windows (aby se ikona neshlukovala s Pythonem)
         try:
             myappid = 'mycompany.aiwinget.installer.v4'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except Exception:
-            pass
+        except Exception: pass
 
-        # Načtení ikony okna
         try:
-            image_path = resource_path("program_icon.png")
+            image_path = boot_system.resource_path("program_icon.png")
             if os.path.exists(image_path):
                 original_image = Image.open(image_path)
                 window_icon = ImageTk.PhotoImage(original_image)
                 self.iconphoto(True, window_icon)
-                # Uložíme si malou verzi pro UI
                 resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
                 self.app_icon = ImageTk.PhotoImage(resized_image)
-        except Exception as e:
-            # Pokud ikona chybí, nevadí, použije se defaultní
-            pass
+        except Exception: pass
 
-        # Geometrie okna
-        w = 1175
-        h = 750
-        ws = self.winfo_screenwidth()
-        hs = self.winfo_screenheight()
-        x = int((ws/2) - (w/2))
-        y = int((hs/2) - (h/2))
+        w, h = 1175, 750
+        ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = int((ws/2) - (w/2)), int((hs/2) - (h/2))
         self.geometry(f'{w}x{h}+{x}+{y}')
-
         self.configure(bg=COLORS['bg_main'])
 
-        # Dark Mode Title Bar (Windows 10/11 hack)
+        # Dark Mode Title Bar
         try:
             from ctypes import windll, byref, c_int
             self.update() 
@@ -113,16 +58,11 @@ class MainApplication(tk.Tk):
                 g = int(clean_hex[2:4], 16)
                 b = int(clean_hex[4:6], 16)
                 return b | (g << 8) | (r << 16)
-                
             target_color = COLORS['bg_sidebar'] 
-            title_color_ref = hex_to_colorref(target_color)
-            text_color_ref = hex_to_colorref("#ffffff")
-            
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(title_color_ref)), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(text_color_ref)), 4)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(hex_to_colorref(target_color))), 4)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(hex_to_colorref("#ffffff"))), 4)
             windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)
-        except Exception:
-            pass
+        except Exception: pass
 
         # --- LAYOUT ---
         container = tk.Frame(self, bg=COLORS['bg_main'])
@@ -146,29 +86,15 @@ class MainApplication(tk.Tk):
         icon_size = 36
         cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0)
         cv.pack(side="left")
-        
-        user_color = "#555555"
-        cv.create_oval(8, 2, 28, 22, fill=user_color, outline="")
-        cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=user_color, outline="")
+        cv.create_oval(8, 2, 28, 22, fill="#555555", outline="")
+        cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill="#555555", outline="")
 
-        lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), 
-                            bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
+        lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
         lbl_user.pack(side="left", padx=12)
         
-        def go_to_settings(e):
-            self.switch_view("settings")
-
+        def go_to_settings(e): self.switch_view("settings")
         lbl_user.bind("<Button-1>", go_to_settings)
         cv.bind("<Button-1>", go_to_settings) 
-        cv.config(cursor="hand2")
-
-        def on_user_enter(e): 
-            lbl_user.config(fg=COLORS['accent']) 
-        def on_user_leave(e): 
-            lbl_user.config(fg=COLORS['fg'])     
-            
-        lbl_user.bind("<Enter>", on_user_enter)
-        lbl_user.bind("<Leave>", on_user_leave)
 
         tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
 
@@ -193,7 +119,6 @@ class MainApplication(tk.Tk):
         self.content_area = tk.Frame(container, bg=COLORS['bg_main'])
         self.content_area.grid(row=0, column=1, sticky="nsew")
         
-        # VIEWS
         self.views = {}
         self.views["installer"] = InstallerPage(self.content_area, self)
         self.views["updater"] = UpdaterPage(self.content_area, self)
@@ -205,11 +130,9 @@ class MainApplication(tk.Tk):
         self.current_view = None
         self.switch_view("installer")
         
-        # Spuštění Splash Screen a následná kontrola update
         SplashScreen(self, on_complete=self.run_startup_update_check)
 
     def run_startup_update_check(self):
-            # Kontrola update na pozadí po načtení UI
             updater = GitHubUpdater(self)
             threading.Thread(target=lambda: updater.check_for_updates(silent=True, on_continue=self.deiconify), daemon=True).start()
     
@@ -249,11 +172,8 @@ class MainApplication(tk.Tk):
             else:
                 btn.config(bg=COLORS['bg_sidebar'], fg=COLORS['fg'], font=("Segoe UI", 10,))
         
-        for v in self.views.values():
-            v.pack_forget()
-        
-        if view_name in self.views:
-            self.views[view_name].pack(fill='both', expand=True)
+        for v in self.views.values(): v.pack_forget()
+        if view_name in self.views: self.views[view_name].pack(fill='both', expand=True)
 
 if __name__ == "__main__":
     app = MainApplication()

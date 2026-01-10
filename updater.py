@@ -12,6 +12,7 @@ import tempfile
 import random
 from pathlib import Path
 
+# NOVÝ IMPORT Z CONFIGU
 from config import CURRENT_VERSION 
 
 # --- KONFIGURACE GITHUB ---
@@ -48,11 +49,10 @@ class UpdateProgressDialog(tk.Toplevel):
     def download_thread(self):
         new_exe_name = "new_version.exe"
         try:
-            # Bezpečné odstranění starého souboru pokud existuje
             if os.path.exists(new_exe_name):
                 try: 
                     os.remove(new_exe_name)
-                except Exception: 
+                except: 
                     pass
             
             response = requests.get(self.download_url, stream=True)
@@ -73,11 +73,10 @@ class UpdateProgressDialog(tk.Toplevel):
             self.after(0, self.destroy)
             
         except Exception as e:
-            # Úklid po chybě
             if os.path.exists(new_exe_name): 
                 try: 
                     os.remove(new_exe_name)
-                except Exception: 
+                except: 
                     pass
             
             self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
@@ -133,44 +132,19 @@ class GitHubUpdater:
             current_exe_path = Path(sys.executable).resolve()
             new_exe_path = Path("new_version.exe").resolve()
             
-            # Pokud běžíme ve skriptu (ne v EXE), nastavíme dummy název pro test
+            # Pokud běžíme ze skriptu (vývoj), nastavíme dummy název
             if not current_exe_path.name.lower().endswith(".exe"): 
                 current_exe_path = Path("AI_Winget_Installer.exe").resolve()
 
-            # --- ZÁLOHA MEI (Fail-safe) ---
-            # Vytvoříme zálohu aktuálních knihoven, kdyby se něco pokazilo, 
-            # ale hlavním řešením je vyčištění proměnných prostředí níže.
-            safe_mei_path = Path(tempfile.gettempdir()) / f"Winget_Safe_MEI_{random.randint(1000, 99999)}"
+            # --- BAT SKRIPT (NUCLEAR OPTION) ---
+            # Vytvoříme BAT soubor, který explicitně vymaže proměnné prostředí
+            # _MEIPASS2 a _MEIPASS těsně před spuštěním nové verze.
+            # Toto je jediný způsob, jak zabránit dědění cesty k temp složce.
             
-            if hasattr(sys, '_MEIPASS'):
-                current_mei = Path(sys._MEIPASS)
-                try:
-                    if safe_mei_path.exists():
-                        shutil.rmtree(safe_mei_path, ignore_errors=True)
-                    shutil.copytree(current_mei, safe_mei_path)
-                except Exception as e:
-                    print(f"Chyba zalohy MEI: {e}")
-
-            # --- BAT SKRIPT ---
             bat_path = current_exe_path.parent / "updater_winget.bat"
             
-            # 1. Čištění prostředí pro subprocess volání
-            clean_env = os.environ.copy()
-            if "_MEIPASS2" in clean_env:
-                del clean_env["_MEIPASS2"]
-            if "_MEIPASS" in clean_env: # Pro jistotu mažeme i toto
-                del clean_env["_MEIPASS"]
-                
-            # Přidání zálohy do PATH (pro případ nouze)
-            if safe_mei_path.exists():
-                clean_env["PATH"] = str(safe_mei_path) + os.pathsep + clean_env.get("PATH", "")
-
-            # 2. Vytvoření BAT souboru
-            # Kritická změna: `set _MEIPASS2=` uvnitř BAT souboru zajistí,
-            # že i když cmd.exe něco zdědí, okamžitě to zapomene před startem nové verze.
             bat_content = f"""
 @echo off
-set _MEIPASS2=
 chcp 65001 > nul
 echo Cekam na ukonceni aplikace...
 timeout /t 2 /nobreak > nul
@@ -185,6 +159,10 @@ if exist "{str(current_exe_path)}" (
 echo Aktualizuji...
 move /Y "{str(new_exe_path)}" "{str(current_exe_path)}" > nul
 
+echo Cistim prostredi...
+set _MEIPASS2=
+set _MEIPASS=
+
 echo Spoustim novou verzi...
 start "" "{str(current_exe_path)}"
 
@@ -193,8 +171,12 @@ start "" "{str(current_exe_path)}"
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
-            # Spuštění s vyčištěným prostředím
-            subprocess.Popen(str(bat_path), shell=True, env=clean_env)
+            # Spustíme BAT soubor. Nepředáváme 'env' parametr, 
+            # protože spoléháme na 'set _MEIPASS2=' uvnitř BAT souboru.
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            subprocess.Popen(str(bat_path), shell=True, startupinfo=startupinfo)
             
             self.parent.quit()
             sys.exit()

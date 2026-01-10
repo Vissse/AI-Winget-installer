@@ -1,100 +1,13 @@
+# gui_components.py
 import tkinter as tk
 import threading
 import requests
-import json
-import os
 from io import BytesIO
 from PIL import Image, ImageTk
 from urllib.parse import urlparse
-from config import COLORS, SETTINGS_FILE
+from config import COLORS
 
-# --- WINGET.RUN API ---
-class WingetRunAPI:
-    BASE_URL = "https://api.winget.run/v2/packages"
-
-    @staticmethod
-    def search(query, limit=5):
-        results = []
-        try:
-            # 1. PARAMETRY - 'ensureContains' je klíčové pro správné výsledky
-            params = {
-                'query': query,
-                'take': limit,
-                'ensureContains': 'true' 
-            }
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            print(f"DEBUG API: Volám URL: {WingetRunAPI.BASE_URL} s parametry {params}")
-            response = requests.get(WingetRunAPI.BASE_URL, params=params, headers=headers, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                packages = []
-
-                # Bezpečné získání seznamu balíčků
-                if isinstance(data, dict):
-                    packages = data.get('Packages', [])
-                elif isinstance(data, list):
-                    packages = data
-                
-                print(f"DEBUG API: Nalezeno {len(packages)} balíčků.")
-
-                for pkg in packages:
-                    if not isinstance(pkg, dict): continue
-
-                    # 1. Získání ID (Kořenový atribut 'Id' nebo 'PackageIdentifier')
-                    pkg_id = pkg.get('Id') or pkg.get('PackageIdentifier')
-                    if not pkg_id: continue
-
-                    # 2. Načtení 'Latest' objektu (Klíčové pro metadata)
-                    latest = pkg.get('Latest', {})
-                    if not isinstance(latest, dict): latest = {}
-
-                    # 3. Získání Názvu (Priorita: Latest.Name -> Root.Name -> ID)
-                    name = latest.get('Name') or pkg.get('Name') or pkg_id
-
-                    # 4. Získání Verze 
-                    # Versions je pole stringů ['1.0', '2.0']. Latest verze je buď v 'Latest' objektu nebo první v poli.
-                    version = "Latest"
-                    versions_list = pkg.get('Versions', [])
-                    if isinstance(versions_list, list) and len(versions_list) > 0:
-                        version = versions_list[0] # První je obvykle nejnovější
-                    
-                    # 5. Získání Ikony (Hledáme všude)
-                    icon_url = latest.get('IconUrl') or pkg.get('IconUrl') or pkg.get('Logo')
-
-                    # 6. Další metadata (Tags, UpdatedAt)
-                    # Tags jsou v Latest jako pole stringů
-                    tags = latest.get('Tags', [])
-                    tags_str = ", ".join(tags[:3]) if tags else "" # Vezmeme první 3 tagy
-                    
-                    # UpdatedAt (Datum aktualizace)
-                    updated_at = pkg.get('UpdatedAt') or latest.get('UpdatedAt') or ""
-                    if updated_at:
-                        # Ořízneme čas, necháme jen datum (např. 2023-10-27)
-                        updated_at = updated_at.split('T')[0]
-
-                    results.append({
-                        "name": name,
-                        "id": pkg_id,
-                        "version": version,
-                        "icon_url": icon_url,
-                        "website": "winget.run",
-                        "tags": tags_str,
-                        "updated": updated_at
-                    })
-            else:
-                print(f"DEBUG API: Chyba serveru: {response.status_code}")
-
-        except Exception as e:
-            print(f"DEBUG API: Kritická chyba: {e}")
-        
-        return results
-
-# --- IKONY ---
+# --- HTTP Session pro ikony ---
 http_session = requests.Session()
 http_session.headers.update({'User-Agent': 'Mozilla/5.0'})
 icon_cache = {}
@@ -117,30 +30,17 @@ class IconLoader:
     @staticmethod
     def _download_strategy(app_id, website, direct_url, label_widget, root):
         urls_to_try = []
-        
-        # 1. Priorita: URL přímo z API (pokud existuje)
-        if direct_url:
-            urls_to_try.append(direct_url)
-
-        # 2. Priorita: GitHub repozitáře (protože API často ikony nevrací)
+        if direct_url: urls_to_try.append(direct_url)
         if app_id and app_id != "Unknown":
-            # WingetUI repozitář (velmi spolehlivý zdroj)
             urls_to_try.append(f"https://raw.githubusercontent.com/marticliment/WingetUI/main/src/wingetui/Assets/Packages/{app_id}.png")
-            
-            # Zkusíme zkrácené ID (např. jen 'Steam' z 'Valve.Steam')
             if "." in app_id:
                 short_id = app_id.split(".")[-1]
                 urls_to_try.append(f"https://raw.githubusercontent.com/marticliment/WingetUI/main/src/wingetui/Assets/Packages/{short_id}.png")
-            
-            # Dashboard Icons
             clean_id = app_id.lower().replace(".", "-")
             urls_to_try.append(f"https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/{clean_id}.png")
-
-        # 3. Priorita: Favicony z webu (jako poslední možnost)
         if website and website != "Unknown" and website != "winget.run":
             domain = IconLoader.get_clean_domain(website)
-            if domain:
-                urls_to_try.append(f"https://icons.duckduckgo.com/ip3/{domain}.ico")
+            if domain: urls_to_try.append(f"https://icons.duckduckgo.com/ip3/{domain}.ico")
 
         for url in urls_to_try:
             try:
@@ -199,8 +99,7 @@ class ToolTip(object):
     def unschedule(self):
         id = self.id
         self.id = None
-        if id:
-            self.widget.after_cancel(id)
+        if id: self.widget.after_cancel(id)
 
     def showtip(self, event=None):
         x = y = 0
@@ -219,8 +118,7 @@ class ToolTip(object):
     def hidetip(self):
         tw = self.tw
         self.tw= None
-        if tw:
-            tw.destroy()
+        if tw: tw.destroy()
 
 class ModernScrollbar(tk.Canvas):
     def __init__(self, parent, command=None, width=10, bg=COLORS['bg_main'], thumb_color="#424242"):
@@ -263,23 +161,3 @@ class ModernScrollbar(tk.Canvas):
 
     def on_enter(self, event): self.itemconfig(self.thumb, fill=self.hover_color)
     def on_leave(self, event): self.itemconfig(self.thumb, fill=self.thumb_color)
-
-class SettingsManager:
-    @staticmethod
-    def load_settings():
-        if not os.path.exists(SETTINGS_FILE):
-            return {"api_key": ""}
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {"api_key": ""}
-
-    @staticmethod
-    def save_settings(data):
-        try:
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-            return True
-        except:
-            return False
