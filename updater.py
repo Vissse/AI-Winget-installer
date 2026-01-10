@@ -7,7 +7,6 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from packaging import version
 import threading
-import shutil
 import tempfile
 import random
 from pathlib import Path
@@ -49,16 +48,13 @@ class UpdateProgressDialog(tk.Toplevel):
         self.on_fail = on_fail
         self.is_downloading = True
         
-        # FIX: Používáme systémový TEMP, aby soubory nestrašily na ploše
         self.temp_dir = tempfile.gettempdir()
-        # Používáme náhodné číslo, aby se soubory nehádaly
         self.target_temp_file = os.path.join(self.temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
         
         threading.Thread(target=self.download_thread, daemon=True).start()
 
     def download_thread(self):
         try:
-            # Úklid předchozích pokusů
             if os.path.exists(self.target_temp_file):
                 try: os.remove(self.target_temp_file)
                 except: pass
@@ -78,7 +74,6 @@ class UpdateProgressDialog(tk.Toplevel):
             if self.total_size > 0 and downloaded < self.total_size: 
                 raise Exception("Stažený soubor je nekompletní.")
                 
-            # Předáme cestu ke staženému souboru dál
             self.after(0, lambda: self.on_success(self.target_temp_file))
             self.after(0, self.destroy)
             
@@ -129,7 +124,6 @@ class GitHubUpdater:
     def _prompt_update(self, new_version, url, size, on_continue):
         msg = f"Je dostupná nová verze {new_version}!\n\nStáhnout a nainstalovat?\n(Aplikace se restartuje)"
         if messagebox.askyesno("Aktualizace", msg, parent=self.parent):
-            # Předáme funkci, která přijme cestu k souboru
             UpdateProgressDialog(self.parent, size, url, self._perform_restart, on_continue)
         else:
             if on_continue: on_continue()
@@ -145,14 +139,13 @@ class GitHubUpdater:
             temp_dir = tempfile.gettempdir()
             bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
             
-            # --- PŘÍPRAVA ČISTÉHO PROSTŘEDÍ (NUCLEAR FIX) ---
-            # Vytvoříme kopii proměnných prostředí a násilně z ní odstraníme
-            # vše, co by mohlo zmást novou verzi (PyInstaller proměnné).
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
             
-            # BAT skript
+            # --- Tady je změna: Používáme EXPLORER.EXE ---
+            # Explorer ignoruje environmentální proměnné rodiče,
+            # takže aplikace nastartuje naprosto čistě.
             bat_content = f"""
 @echo off
 chcp 65001 > nul
@@ -168,11 +161,8 @@ if exist "{str(current_exe_path)}" (
 
 move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
-echo Cleaning PyInstaller environment...
-set _MEIPASS2=
-set _MEIPASS=
-
-start "" "{str(current_exe_path)}"
+echo Spoustim pres Explorer (Breakaway)...
+explorer.exe "{str(current_exe_path)}"
 
 (goto) 2>nul & del "%~f0"
 """
@@ -182,8 +172,7 @@ start "" "{str(current_exe_path)}"
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            # SPOUŠTÍME S ČISTÝM PROSTŘEDÍM (env=clean_env)
-            # Toto je klíčová změna - BAT soubor ani neuvidí starou _MEIPASS2
+            # Spouštíme batch file
             subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
             
             self.parent.quit()
