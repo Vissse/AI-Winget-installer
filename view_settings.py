@@ -17,60 +17,87 @@ class SettingsPage(tk.Frame):
         self.settings = SettingsManager.load_settings()
         current_key = self.settings.get("api_key", "")
 
+        # 1. Hlavní nadpis stránky
         header = tk.Frame(self, bg=COLORS['bg_main'], pady=20, padx=20)
         header.pack(fill='x')
         tk.Label(header, text="Uživatelské nastavení", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg="white").pack(side="left")
 
+        # Hlavní kontejner obsahu
         content = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
         content.pack(fill='both', expand=True)
 
+        # ==========================================
+        # 1. SEKCE: GEMINI API (Horní kontejner)
+        # ==========================================
         api_frame = tk.Frame(content, bg=COLORS['bg_sidebar'], padx=20, pady=20)
         api_frame.pack(fill='x', pady=(0, 20))
 
         tk.Label(api_frame, text="Gemini API Klíč", font=("Segoe UI", 12, "bold"), bg=COLORS['bg_sidebar'], fg="white").pack(anchor="w")
         tk.Label(api_frame, text="Pro fungování AI vyhledávání je potřeba Google Gemini API klíč.", font=("Segoe UI", 9), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", pady=(0, 10))
 
+        # Vstupní pole
         entry_bg = tk.Frame(api_frame, bg=COLORS['input_bg'], padx=10, pady=5)
         entry_bg.pack(fill='x')
         self.api_entry = tk.Entry(entry_bg, font=("Consolas", 11), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
         self.api_entry.pack(fill='x')
         self.api_entry.insert(0, current_key)
 
+        # Odkaz
         link_lbl = tk.Label(api_frame, text="🔗 Získat API klíč zdarma (Google AI Studio)", font=("Segoe UI", 9, "underline"), bg=COLORS['bg_sidebar'], fg=COLORS['accent'], cursor="hand2")
         link_lbl.pack(anchor="w", pady=(10, 5))
         link_lbl.bind("<Button-1>", lambda e: webbrowser.open("https://aistudio.google.com/app/apikey"))
 
-        btn_frame = tk.Frame(api_frame, bg=COLORS['bg_sidebar'])
-        btn_frame.pack(fill='x', pady=(20, 0))
+        # Tlačítka pro API sekci
+        api_btn_frame = tk.Frame(api_frame, bg=COLORS['bg_sidebar'])
+        api_btn_frame.pack(fill='x', pady=(20, 0))
 
-        save_btn = tk.Button(btn_frame, text="💾 Uložit klíč", command=self.save_key, bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=8, cursor="hand2")
+        # [Tlačítko] ULOŽIT
+        save_btn = tk.Button(api_btn_frame, text="💾 Uložit klíč", command=self.save_key, bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=8, cursor="hand2")
         save_btn.pack(side="left")
         def on_save_enter(e): save_btn.config(bg=COLORS['accent_hover'])
         def on_save_leave(e): save_btn.config(bg=COLORS['accent'])
         save_btn.bind("<Enter>", on_save_enter)
         save_btn.bind("<Leave>", on_save_leave)
 
-        check_btn = tk.Button(btn_frame, text="⚡ Ověřit správnost API", command=self.check_api_status, bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
+        # [Tlačítko] OVĚŘIT API
+        check_btn = tk.Button(api_btn_frame, text="⚡ Ověřit správnost API", command=self.check_api_status, bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
         check_btn.pack(side="left", padx=10)
         def on_check_enter(e): check_btn.config(bg=COLORS['item_hover'])
         def on_check_leave(e): check_btn.config(bg=COLORS['input_bg'])
         check_btn.bind("<Enter>", on_check_enter)
         check_btn.bind("<Leave>", on_check_leave)
 
-        update_btn = tk.Button(btn_frame, text="🔄 Zkontrolovat update", command=self.check_update, bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
-        update_btn.pack(side="left", padx=10)
-        def on_update_enter(e): update_btn.config(bg=COLORS['item_hover'])
-        def on_update_leave(e): update_btn.config(bg=COLORS['input_bg'])
-        update_btn.bind("<Enter>", on_update_enter)
-        update_btn.bind("<Leave>", on_update_leave)
-  
-        quota_btn = tk.Button(btn_frame, text="📊 Graf spotřeby", command=lambda: webbrowser.open("https://aistudio.google.com/app/usage?timeRange=last-90-days"), bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
+        # [Tlačítko] GRAF SPOTŘEBY (Přesunuto sem místo update tlačítka)
+        quota_btn = tk.Button(api_btn_frame, text="📊 Graf spotřeby", command=lambda: webbrowser.open("https://aistudio.google.com/app/usage?timeRange=last-90-days"), bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
         quota_btn.pack(side="left", padx=10)
         def on_quota_enter(e): quota_btn.config(bg=COLORS['item_hover'])
         def on_quota_leave(e): quota_btn.config(bg=COLORS['input_bg'])
         quota_btn.bind("<Enter>", on_quota_enter)
         quota_btn.bind("<Leave>", on_quota_leave)
 
+
+        # ==========================================
+        # 2. SEKCE: APLIKACE (Dolní kontejner)
+        # ==========================================
+        app_frame = tk.Frame(content, bg=COLORS['bg_sidebar'], padx=20, pady=20)
+        app_frame.pack(fill='x', pady=(0, 20))
+
+        tk.Label(app_frame, text="Aplikace", font=("Segoe UI", 12, "bold"), bg=COLORS['bg_sidebar'], fg="white").pack(anchor="w")
+        tk.Label(app_frame, text="Správa verze a aktualizací programu.", font=("Segoe UI", 9), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", pady=(0, 10))
+
+        app_btn_frame = tk.Frame(app_frame, bg=COLORS['bg_sidebar'])
+        app_btn_frame.pack(fill='x', pady=(10, 0))
+
+        # [Tlačítko] UPDATE (Nyní zde samostatně)
+        update_btn = tk.Button(app_btn_frame, text="🔄 Zkontrolovat update", command=self.check_update, bg=COLORS['input_bg'], fg="white", font=("Segoe UI", 10), relief="flat", padx=20, pady=8, cursor="hand2")
+        update_btn.pack(side="left")
+        def on_update_enter(e): update_btn.config(bg=COLORS['item_hover'])
+        def on_update_leave(e): update_btn.config(bg=COLORS['input_bg'])
+        update_btn.bind("<Enter>", on_update_enter)
+        update_btn.bind("<Leave>", on_update_leave)
+
+
+        # --- STATUS PANEL (Úplně dole) ---
         self.status_frame = tk.Frame(content, bg=COLORS['bg_main'], pady=20)
         self.status_frame.pack(fill='x')
         self.status_label = tk.Label(self.status_frame, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'])

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # ZDE JE NYNÍ VERZE APLIKACE
-CURRENT_VERSION = "5.0"
+CURRENT_VERSION = "5.1"
 
 # --- NASTAVENÍ CESTY DO DOKUMENTŮ ---
 # Tímto zajistíme, že se nastavení uloží do C:/Users/Uzivatel/Documents/AI_Winget_Installer/
