@@ -80,23 +80,42 @@ class MainApplication(tk.Tk):
         ver_label.pack(side="bottom", pady=20)
 
         # PROFIL
-        profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15)
+        profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15, cursor="hand2")
         profile_frame.pack(fill='x', side="top")
         
         icon_size = 36
-        cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0)
+        cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0, cursor="hand2")
         cv.pack(side="left")
-        cv.create_oval(8, 2, 28, 22, fill="#555555", outline="")
-        cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill="#555555", outline="")
+        
+        # Původní šedá barva ikony
+        default_user_color = "#555555"
+        
+        # Vytvoření ikonky (panáčka)
+        cv.create_oval(8, 2, 28, 22, fill=default_user_color, outline="")
+        cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=default_user_color, outline="")
 
-        lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
+        lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), 
+                            bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
         lbl_user.pack(side="left", padx=12)
         
-        def go_to_settings(e): self.switch_view("settings")
-        lbl_user.bind("<Button-1>", go_to_settings)
-        cv.bind("<Button-1>", go_to_settings) 
+        # Funkce pro kliknutí (přechod do nastavení)
+        def go_to_settings(e):
+            self.switch_view("settings")
 
-        tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
+        # Funkce pro Hover efekt (najetí myši)
+        def on_profile_enter(e): 
+            lbl_user.config(fg=COLORS['accent'])           # Změní text na modrou
+            cv.itemconfig("all", fill=COLORS['accent'])    # Změní ikonku na modrou
+
+        def on_profile_leave(e): 
+            lbl_user.config(fg=COLORS['fg'])               # Vrátí bílý text
+            cv.itemconfig("all", fill=default_user_color)  # Vrátí šedou ikonku
+
+        # Aplikujeme logiku na všechny prvky v rámečku, aby to reagovalo hezky jako celek
+        for widget in [profile_frame, cv, lbl_user]:
+            widget.bind("<Button-1>", go_to_settings)
+            widget.bind("<Enter>", on_profile_enter)
+            widget.bind("<Leave>", on_profile_leave)
 
         # MENU
         self.menu_buttons = {}
@@ -111,9 +130,6 @@ class MainApplication(tk.Tk):
         
         tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=20)
         
-        tk.Label(self.sidebar, text="Moje Projekty", font=("Segoe UI", 9, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", padx=20, pady=(0, 10))
-        self.create_project_item("#  Winget Tools", 12)
-        self.create_project_item("#  Gaming", 5)
 
         # CONTENT AREA
         self.content_area = tk.Frame(container, bg=COLORS['bg_main'])

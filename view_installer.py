@@ -140,15 +140,19 @@ class InstallerPage(tk.Frame):
         if self.is_searching: return 
         self.is_searching = True
         self.search_btn.config(cursor="arrow") 
-        self.input_entry.delete(0, 'end') 
+        # self.input_entry.delete(0, 'end') mazání vstupu
         self.progress.pack(fill='x', pady=(5, 0))
         self.progress.start(10) 
         threading.Thread(target=self.get_winget_ids_thread, args=(user_request,)).start()
 
     def get_winget_ids_thread(self, user_request):
+        # 1. Načtení klíče
         settings = SettingsManager.load_settings()
         api_key = settings.get("api_key", "")
+        
         print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
+        
+        # 2. Inicializace klienta (NOVÉ SDK)
         try:
             client = genai.Client(api_key=api_key)
         except Exception as e:
@@ -163,21 +167,31 @@ class InstallerPage(tk.Frame):
         Pokud hledá kategorii, vrať seznam nejlepších aplikací.
         Odpověz POUZE ve formátu: QUERIES: app1;app2;app3
         """
+
         search_terms = []
         try:
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=intent_prompt)
+            # NOVÉ VOLÁNÍ API
+            response = client.models.generate_content(
+                model="gemini-2.5-flash", 
+                contents=intent_prompt
+            )
             raw_intent = response.text.strip()
+            
             if "QUERIES:" in raw_intent:
                 clean_line = raw_intent.replace("QUERIES:", "").strip()
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
                 search_terms = [user_request]
             print(f"AI navrhlo: {search_terms}")
+
         except Exception as e:
             print(f"Chyba AI intent: {e}")
             search_terms = [user_request]
 
+        # 2. KROK: Hromadné hledání ve Winget
+        # Spustíme hledání pro každý výraz, který AI navrhlo
         combined_output = ""
+        
         self.progress['maximum'] = len(search_terms) * 100
         current_prog = 0
         
@@ -189,23 +203,47 @@ class InstallerPage(tk.Frame):
                 result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
                 combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n" + result.stdout
             except: pass
+            
+            # Aktualizace progress baru (jen vizuálně)
             current_prog += 100
+            # V threadu nemůžeme přímo měnit GUI bezpečně, ale u jednoduchých proměnných to v Tkinteru často projde. 
+            # Správnější by bylo frontování, ale pro jednoduchost necháme běžet.
 
+        # 3. KROK: Finální filtrace a formátování na JSON
+        # Teď máme "špinavý" výstup z několika hledání, AI z toho musí vytáhnout to důležité.
+        
         filter_prompt = f"""
         Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
         Původní dotaz uživatele byl: "{user_request}"
+        
         SUROVÁ DATA Z WINGET:
-        '''{combined_output}'''
+        '''
+        {combined_output}
+        '''
+
         INSTRUKCE:
         1. Analyzuj surová data a najdi aplikace, které odpovídají záměru uživatele.
-        2. Pokud data obsahují balast, ignoruj je. Hledáme hlavní aplikace.
+        2. Pokud data obsahují balast (knihovny, ovladače), ignoruj je. Hledáme hlavní aplikace. (bez duplicit - žádné Bety ani jiné alternativní verze určitého programu). Pokud se budou nacházet dvě verze určitého programu např. GIMP má z nějakého důvodu ve wingetu 2 verze, vždy vyber tu novější.
         3. Extrahuj Název, ID a Verzi.
-        4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace, pokus se ID odhadnout.
+        4. Pokud ID nevidíš v datech, ale jsi si jistý, že to je ta správná aplikace (např. jsi ji sám navrhl v předchozím kroku), pokus se ID odhadnout (např. 'Mozilla.Firefox').
+        
         VÝSTUPNÍ FORMÁT (čistý JSON pole):
-        [ {{ "name": "Název aplikace", "id": "Přesné.ID", "version": "verze (nebo 'Latest')", "website": "domena.com" }} ]
+        [
+            {{ 
+                "name": "Název aplikace", 
+                "id": "Přesné.ID", 
+                "version": "verze (nebo 'Latest')", 
+                "website": "domena.com" 
+            }}
+        ]
         """
+
         try:
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=filter_prompt)
+            # NOVÉ VOLÁNÍ API
+            response = client.models.generate_content(
+                model="gemini-2.5-flash", 
+                contents=filter_prompt
+            )
             raw_text = response.text
             json_str = raw_text.replace("```json", "").replace("```", "").strip()
             match = re.search(r'\[.*\]', json_str, re.DOTALL)
