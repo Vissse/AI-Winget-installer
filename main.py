@@ -1,23 +1,67 @@
 # main.py
-import tkinter as tk
 import sys
+import os
+import shutil
+import tempfile
+import random
+from pathlib import Path
+import time
+
+# ============================================================================
+# 🛡️ SAFE BOOT & MEI BACKUP LOGIC
+# ============================================================================
+# Tato sekce zajišťuje stabilitu při auto-updatech a řeší problémy s PyInstallerem.
+# Viz: nový 1.txt a přiložené schéma.
+
+# 1. OŠETŘENÍ PROSTŘEDÍ PRO UPDATE 
+# Pokud aplikace startuje jako nová verze (spuštěná starou verzí),
+# musíme smazat zděděnou cestu ke staré MEI složce, jinak spadneme na chybějících DLL.
+if "_MEIPASS2" in os.environ:
+    del os.environ["_MEIPASS2"]
+
+# 2. ZÁLOHA MEI SLOŽKY (Logika z obrázku)
+# Pokud běžíme jako zkompilované EXE (frozen), vytvoříme zálohu běžícího prostředí.
+# To zajistí, že pokud původní temp složku smaže systém nebo update proces,
+# aplikace má kam sáhnout pro kritické soubory.
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    try:
+        # Aktuální běžící složka (např. %TEMP%/_MEI123456)
+        current_mei = Path(sys._MEIPASS)
+        
+        # Vytvoření bezpečné cesty (např. %TEMP%/AIWinget_Safe_MEI_8492)
+        safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
+        
+        # Pokud záloha neexistuje, vytvoříme ji
+        if not safe_mei_path.exists():
+            # Použijeme copytree pro rekurzivní kopírování
+            shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
+            
+        # (Volitelné) Přidáme záložní cestu do systémové PATH pro tento proces
+        # Kdyby se nenašlo DLL v originále, Windows se podívá sem.
+        os.environ["PATH"] += os.pathsep + str(safe_mei_path)
+        
+    except Exception as e:
+        # Pokud se záloha nepovede (např. práva), jen vypíšeme chybu, ale aplikaci nezastavíme
+        print(f"Warning: Nepodařilo se vytvořit zálohu MEI: {e}")
+
+# ============================================================================
+# HLAVNÍ APLIKACE
+# ============================================================================
+
+import tkinter as tk
 import ctypes
 import threading
 from PIL import Image, ImageTk 
 from config import COLORS
 from splash import SplashScreen
-# Přidán import SettingsPage a SettingsManager
 from views import InstallerPage, UpdaterPage, PlaceholderPage, HealthCheckPage, SettingsPage
 from utils import SettingsManager
 from updater import CURRENT_VERSION, GitHubUpdater
 
-import os
-
-if "_MEIPASS2" in os.environ:
-    del os.environ["_MEIPASS2"]
-
 def resource_path(relative_path):
+    """Získá cestu k souborům, funguje pro dev i pro PyInstaller exe."""
     try:
+        # PyInstaller vytvoří temp složku a uloží cestu do _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
@@ -34,7 +78,6 @@ class MainApplication(tk.Tk):
         super().__init__()
         self.withdraw() 
         self.title("AI Winget Installer")
-
         
         # --- FIX PRO TASKBAR IKONU ---
         try:
@@ -45,24 +88,21 @@ class MainApplication(tk.Tk):
 
         # --- NASTAVENÍ HLAVNÍ IKONY ---
         try:
-            # Zde zadejte přesný název souboru, který tam máte (např. program_icon_3.jpg nebo program_icon.png)
             image_path = resource_path("program_icon.png")
             
             # 1. Načtení originálu
             original_image = Image.open(image_path)
             
-            # 2. Ikona pro lištu Windows (Taskbar) - necháme kvalitní originál
+            # 2. Ikona pro lištu Windows (Taskbar)
             window_icon = ImageTk.PhotoImage(original_image)
             self.iconphoto(True, window_icon)
 
-            # 3. Ikona pro menu (Sidebar) - ZDE BOLA CHYBA
-            # Musíme ji zmenšit, jinak roztáhne okno
+            # 3. Ikona pro menu (Sidebar)
             resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
             self.app_icon = ImageTk.PhotoImage(resized_image)
             
         except Exception as e:
             print(f"Nepodařilo se načíst ikonu aplikace: {e}")
-            # Pokud se obrázek nenajde, smažeme atribut, aby naskočil Canvas fallback (šedé kolečko s 'U')
             if hasattr(self, 'app_icon'):
                 del self.app_icon
 
@@ -111,43 +151,33 @@ class MainApplication(tk.Tk):
         ver_label = tk.Label(self.sidebar, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
         ver_label.pack(side="bottom", pady=20)
 
-        # --- PROFIL (Upravený design) ---
-        # Rámeček profilu - už nemá cursor="hand2", protože neklikáme na celý box
+        # --- PROFIL ---
         profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15)
         profile_frame.pack(fill='x', side="top")
         
-        # 1. Obecná ikonka uživatele (Vykreslená v Canvasu)
-        # Místo načítání obrázku si ji nakreslíme, bude vypadat vždy ostře a čistě
         icon_size = 36
         cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0)
         cv.pack(side="left")
         
-        # Kreslení panáčka (šedá barva)
         user_color = "#555555"
-        # Hlava
         cv.create_oval(8, 2, 28, 22, fill=user_color, outline="")
-        # Ramena (oblouk dole)
         cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=user_color, outline="")
 
-        # 2. Text Uživatel (Klikatelný)
         lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), 
                             bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
         lbl_user.pack(side="left", padx=12)
         
-        # LOGIKA KLIKNUTÍ NA PROFIL -> PŘEPNOUT NA SETTINGS
         def go_to_settings(e):
             self.switch_view("settings")
 
-        # Bindujeme kliknutí POUZE na text a ikonku (ne na celý frame)
         lbl_user.bind("<Button-1>", go_to_settings)
         cv.bind("<Button-1>", go_to_settings) 
-        cv.config(cursor="hand2") # Ikonka bude mít taky ručičku
+        cv.config(cursor="hand2")
 
-        # Decentní hover efekt pouze pro text (změna barvy písma)
         def on_user_enter(e): 
-            lbl_user.config(fg=COLORS['accent']) # Zmodrá při najetí
+            lbl_user.config(fg=COLORS['accent']) 
         def on_user_leave(e): 
-            lbl_user.config(fg=COLORS['fg'])     # Vrátí se na bílou
+            lbl_user.config(fg=COLORS['fg'])     
             
         lbl_user.bind("<Enter>", on_user_enter)
         lbl_user.bind("<Leave>", on_user_leave)
@@ -159,7 +189,6 @@ class MainApplication(tk.Tk):
                   bg=COLORS['accent'], fg="white", font=("Segoe UI", 10, "bold"), 
                   relief="flat", anchor="w", padx=15, pady=8, cursor="hand2").pack(fill='x', padx=15, pady=(0, 5))
         
-
         self.create_menu_item("installer", "📦  Installer")
         self.create_menu_item("updater", "🔄  Updater")
         self.create_menu_item("health", "🩺  Health Check")
@@ -180,7 +209,7 @@ class MainApplication(tk.Tk):
         self.views["updater"] = UpdaterPage(self.content_area, self)
         self.views["health"] = HealthCheckPage(self.content_area, self)
         self.views["upcoming"] = PlaceholderPage(self.content_area, "Upcoming Updates", "📅")
-        self.views["settings"] = SettingsPage(self.content_area, self) # PŘIDÁNO SETTINGS
+        self.views["settings"] = SettingsPage(self.content_area, self)
 
         self.current_view = None
         self.switch_view("installer")
@@ -188,14 +217,9 @@ class MainApplication(tk.Tk):
         SplashScreen(self, on_complete=self.run_startup_update_check)
 
     def run_startup_update_check(self):
-            """Spustí kontrolu updatu ve vlákně, aby nezamrzlo GUI (i když je okno skryté)."""
+            """Spustí kontrolu updatu ve vlákně."""
             updater = GitHubUpdater(self)
-            
-            # Spustíme kontrolu. Parametr 'on_continue' říká, co dělat, když update není (nebo ho uživatel zruší).
-            # V našem případě: self.deiconify (zobrazit hlavní okno).
             threading.Thread(target=lambda: updater.check_for_updates(silent=True, on_continue=self.deiconify), daemon=True).start()
-
-    # ... (zbytek metod create_menu_item, create_project_item, on_menu_hover zůstává stejný)
     
     def create_menu_item(self, view_name, text):
         btn = tk.Button(self.sidebar, text=text, font=("Segoe UI", 10), 
