@@ -11,7 +11,7 @@ import shutil
 # --- KONFIGURACE GITHUB ---
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"  # <-- ZKONTROLUJTE SI NÁZEV
-CURRENT_VERSION = "4.3.14"      # Zvedněte verzi
+CURRENT_VERSION = "4.3.15"      # Zvedněte verzi
 
 class UpdateProgressDialog(tk.Toplevel):
     def __init__(self, parent, total_size, download_url, on_success, on_fail):
