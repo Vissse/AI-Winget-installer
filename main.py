@@ -1,24 +1,32 @@
 # main.py
 import tkinter as tk
-import threading
+import sys
 import os
 import ctypes
+import threading
 from PIL import Image, ImageTk 
 
-# 1. BOOT CHECK (Musí být první)
+# Moduly
 import boot_system
-boot_system.perform_boot_checks()
-
-# 2. KONFIGURACE A UTILS
-from config import COLORS, CURRENT_VERSION
+from config import COLORS, CURRENT_VERSION, THEMES
 from splash import SplashScreen
 from updater import GitHubUpdater
 
-# 3. NAČTENÍ POHLEDŮ (VIEWS)
+# IMPORTY Z NOVÉ STRUKTURY
 from view_installer import InstallerPage
 from view_health import HealthCheckPage
 from view_settings import SettingsPage
 from view_other import UpdaterPage, PlaceholderPage
+
+# Spustíme boot checky
+boot_system.perform_boot_checks()
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 class MainApplication(tk.Tk):
     def __init__(self):
@@ -26,13 +34,15 @@ class MainApplication(tk.Tk):
         self.withdraw() 
         self.title("AI Winget Installer")
         
+        # AppID
         try:
-            myappid = 'mycompany.aiwinget.installer.v4'
+            myappid = 'mycompany.aiwinget.installer.v5'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception: pass
 
+        # Ikona
         try:
-            image_path = boot_system.resource_path("program_icon.png")
+            image_path = resource_path("program_icon.png")
             if os.path.exists(image_path):
                 original_image = Image.open(image_path)
                 window_icon = ImageTk.PhotoImage(original_image)
@@ -43,36 +53,32 @@ class MainApplication(tk.Tk):
 
         w, h = 1175, 750
         ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
-        x, y = int((ws/2) - (w/2)), int((hs/2) - (h/2))
+        x = int((ws/2) - (w/2))
+        y = int((hs/2) - (h/2))
         self.geometry(f'{w}x{h}+{x}+{y}')
+
+        # Hlavní kontejner (obaluje vše)
+        self.container = tk.Frame(self)
+        self.container.pack(fill='both', expand=True)
+        self.container.grid_columnconfigure(0, weight=0, minsize=250) 
+        self.container.grid_columnconfigure(1, weight=1)              
+        self.container.grid_rowconfigure(0, weight=1)
+
+        # Vykreslení GUI
+        self.create_interface()
+        
+        SplashScreen(self, on_complete=self.run_startup_update_check)
+
+    def create_interface(self):
+        """Smaže staré GUI a vykreslí nové podle aktuálních COLORS"""
+        
+        # 1. Aplikace barev na pozadí okna
         self.configure(bg=COLORS['bg_main'])
+        self.container.config(bg=COLORS['bg_main'])
+        self.apply_window_theme()
 
-        # Dark Mode Title Bar
-        try:
-            from ctypes import windll, byref, c_int
-            self.update() 
-            hwnd = windll.user32.GetParent(self.winfo_id())
-            def hex_to_colorref(hex_str):
-                clean_hex = hex_str.lstrip('#')
-                r = int(clean_hex[0:2], 16)
-                g = int(clean_hex[2:4], 16)
-                b = int(clean_hex[4:6], 16)
-                return b | (g << 8) | (r << 16)
-            target_color = COLORS['bg_sidebar'] 
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(hex_to_colorref(target_color))), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(hex_to_colorref("#ffffff"))), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)
-        except Exception: pass
-
-        # --- LAYOUT ---
-        container = tk.Frame(self, bg=COLORS['bg_main'])
-        container.pack(fill='both', expand=True)
-        container.grid_columnconfigure(0, weight=0, minsize=250) 
-        container.grid_columnconfigure(1, weight=1)              
-        container.grid_rowconfigure(0, weight=1)
-
-        # SIDEBAR
-        self.sidebar = tk.Frame(container, bg=COLORS['bg_sidebar'])
+        # 2. SIDEBAR
+        self.sidebar = tk.Frame(self.container, bg=COLORS['bg_sidebar'])
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_propagate(False)
 
@@ -87,35 +93,34 @@ class MainApplication(tk.Tk):
         cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0, cursor="hand2")
         cv.pack(side="left")
         
-        # Původní šedá barva ikony
-        default_user_color = "#555555"
+        # Barva ikony podle kontrastu
+        default_user_color = "#555555" if COLORS['bg_sidebar'] == "#ffffff" else "#888888"
         
-        # Vytvoření ikonky (panáčka)
-        cv.create_oval(8, 2, 28, 22, fill=default_user_color, outline="")
-        cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=default_user_color, outline="")
+        user_oval = cv.create_oval(8, 2, 28, 22, fill=default_user_color, outline="")
+        user_arc = cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=default_user_color, outline="")
 
         lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), 
                             bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
         lbl_user.pack(side="left", padx=12)
         
-        # Funkce pro kliknutí (přechod do nastavení)
-        def go_to_settings(e):
-            self.switch_view("settings")
-
-        # Funkce pro Hover efekt (najetí myši)
+        def go_to_settings(e): self.switch_view("settings")
+        
         def on_profile_enter(e): 
-            lbl_user.config(fg=COLORS['accent'])           # Změní text na modrou
-            cv.itemconfig("all", fill=COLORS['accent'])    # Změní ikonku na modrou
+            lbl_user.config(fg=COLORS['accent']) 
+            cv.itemconfig(user_oval, fill=COLORS['accent'])
+            cv.itemconfig(user_arc, fill=COLORS['accent'])
 
         def on_profile_leave(e): 
-            lbl_user.config(fg=COLORS['fg'])               # Vrátí bílý text
-            cv.itemconfig("all", fill=default_user_color)  # Vrátí šedou ikonku
+            lbl_user.config(fg=COLORS['fg'])     
+            cv.itemconfig(user_oval, fill=default_user_color)
+            cv.itemconfig(user_arc, fill=default_user_color)
 
-        # Aplikujeme logiku na všechny prvky v rámečku, aby to reagovalo hezky jako celek
-        for widget in [profile_frame, cv, lbl_user]:
-            widget.bind("<Button-1>", go_to_settings)
-            widget.bind("<Enter>", on_profile_enter)
-            widget.bind("<Leave>", on_profile_leave)
+        for w in [profile_frame, cv, lbl_user]:
+            w.bind("<Button-1>", go_to_settings)
+            w.bind("<Enter>", on_profile_enter)
+            w.bind("<Leave>", on_profile_leave)
+
+        tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
 
         # MENU
         self.menu_buttons = {}
@@ -130,11 +135,15 @@ class MainApplication(tk.Tk):
         
         tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=20)
         
+        tk.Label(self.sidebar, text="Moje Projekty", font=("Segoe UI", 9, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", padx=20, pady=(0, 10))
+        self.create_project_item("#  Winget Tools", 12)
+        self.create_project_item("#  Gaming", 5)
 
         # CONTENT AREA
-        self.content_area = tk.Frame(container, bg=COLORS['bg_main'])
+        self.content_area = tk.Frame(self.container, bg=COLORS['bg_main'])
         self.content_area.grid(row=0, column=1, sticky="nsew")
         
+        # VIEWS - Tady se používají vaše nové soubory
         self.views = {}
         self.views["installer"] = InstallerPage(self.content_area, self)
         self.views["updater"] = UpdaterPage(self.content_area, self)
@@ -143,10 +152,44 @@ class MainApplication(tk.Tk):
         self.views["settings"] = SettingsPage(self.content_area, self)
         self.views["all_apps"] = PlaceholderPage(self.content_area, "Všechny aplikace", "☰")
 
-        self.current_view = None
-        self.switch_view("installer")
-        
-        SplashScreen(self, on_complete=self.run_startup_update_check)
+        # Obnovení posledního pohledu
+        target = self.current_view if hasattr(self, 'current_view') and self.current_view else "installer"
+        self.switch_view(target)
+
+    def update_theme(self, theme_name):
+        """Metoda pro LIVE změnu tématu"""
+        if theme_name in THEMES:
+            # 1. Aktualizujeme globální slovník COLORS (na místě)
+            COLORS.update(THEMES[theme_name])
+            
+            # 2. Smažeme všechny widgety v kontejneru (staré barvy)
+            for widget in self.container.winfo_children():
+                widget.destroy()
+            
+            # 3. Znovu vytvoříme rozhraní (použije nové COLORS)
+            self.create_interface()
+
+    def apply_window_theme(self):
+        try:
+            from ctypes import windll, byref, c_int
+            self.update() 
+            hwnd = windll.user32.GetParent(self.winfo_id())
+            
+            def hex_to_colorref(hex_str):
+                clean_hex = hex_str.lstrip('#')
+                r = int(clean_hex[0:2], 16)
+                g = int(clean_hex[2:4], 16)
+                b = int(clean_hex[4:6], 16)
+                return b | (g << 8) | (r << 16)
+            
+            target_color = COLORS['bg_sidebar'] 
+            text_color = "#ffffff" if COLORS['bg_sidebar'] != "#ffffff" else "#000000"
+            is_dark = 1 if COLORS['bg_sidebar'] != "#ffffff" else 0
+
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(hex_to_colorref(target_color))), 4)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(hex_to_colorref(text_color))), 4)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(is_dark)), 4)
+        except Exception: pass
 
     def run_startup_update_check(self):
             updater = GitHubUpdater(self)
@@ -166,10 +209,11 @@ class MainApplication(tk.Tk):
     def create_project_item(self, text, count):
         frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], cursor="hand2")
         frame.pack(fill='x', padx=5, pady=1)
-        lbl_text = tk.Label(frame, text=text, font=("Segoe UI", 10), bg=COLORS['bg_sidebar'], fg="#aaa", anchor="w")
+        lbl_text = tk.Label(frame, text=text, font=("Segoe UI", 10), bg=COLORS['bg_sidebar'], fg="#aaa" if COLORS['bg_sidebar']!='#ffffff' else '#666', anchor="w")
         lbl_text.pack(side="left", padx=15, pady=6)
         lbl_count = tk.Label(frame, text=str(count), font=("Segoe UI", 9), bg=COLORS['bg_sidebar'], fg="#666")
         lbl_count.pack(side="right", padx=10)
+        
         def enter(e): frame.config(bg=COLORS['sidebar_hover'])
         def leave(e): frame.config(bg=COLORS['bg_sidebar'])
         frame.bind("<Enter>", enter)
@@ -188,8 +232,11 @@ class MainApplication(tk.Tk):
             else:
                 btn.config(bg=COLORS['bg_sidebar'], fg=COLORS['fg'], font=("Segoe UI", 10,))
         
-        for v in self.views.values(): v.pack_forget()
-        if view_name in self.views: self.views[view_name].pack(fill='both', expand=True)
+        for v in self.views.values():
+            v.pack_forget()
+        
+        if view_name in self.views:
+            self.views[view_name].pack(fill='both', expand=True)
 
 if __name__ == "__main__":
     app = MainApplication()
