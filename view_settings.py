@@ -20,7 +20,6 @@ class SettingsPage(tk.Frame):
         self.current_key = self.settings.get("api_key", "")
         
         saved_theme = self.settings.get("theme", "Dark (Default)")
-        # Fix pro staré názvy
         if saved_theme == "Notion Light": saved_theme = "Light (Minimal)"
         self.current_theme = saved_theme
         
@@ -39,15 +38,15 @@ class SettingsPage(tk.Frame):
         content.pack(fill='x', anchor="n", pady=(0, 20))
 
         # ==========================================
-        # 1. SEKCE: GEMINI API (Původní)
+        # 1. SEKCE: GEMINI API
         # ==========================================
         self.create_header(content, "Gemini API")
         
         tk.Label(content, 
                  text="Pro fungování AI vyhledávání je potřeba Google Gemini API klíč.", 
-                 font=("Segoe UI", 9), 
+                 font=("Segoe UI", 10), 
                  bg=COLORS['bg_main'], 
-                 fg=COLORS['sub_text']
+                 fg=COLORS['fg']
         ).pack(anchor="w", pady=(0, 10))
         
         api_container = tk.Frame(content, bg=COLORS['bg_main'], pady=5)
@@ -72,24 +71,30 @@ class SettingsPage(tk.Frame):
         sub_row = tk.Frame(api_container, bg=COLORS['bg_main'])
         sub_row.pack(fill='x', pady=(10, 0))
 
-        link_lbl = tk.Label(sub_row, text="Získat klíč zdarma (Google AI Studio)", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'], cursor="hand2")
+        link_lbl = tk.Label(sub_row, text="Jak získat API klíč? (Google AI Studio)", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'], cursor="hand2")
         link_lbl.pack(side="left")
         link_lbl.bind("<Button-1>", lambda e: webbrowser.open("https://aistudio.google.com/app/apikey"))
         link_lbl.bind("<Enter>", lambda e: link_lbl.config(fg=COLORS['accent'], font=("Segoe UI", 9, "underline")))
         link_lbl.bind("<Leave>", lambda e: link_lbl.config(fg=COLORS['sub_text'], font=("Segoe UI", 9)))
 
+        # Tlačítka s novým stylem (bez boxíku, modrý text na hover)
         self.create_tool_btn(sub_row, "📊 Graf", lambda: webbrowser.open("https://aistudio.google.com/app/usage"))
         self.create_tool_btn(sub_row, "⚡ Ověřit", self.check_api_status)
+
+        # --- OPRAVA: PŘIDÁNÍ STATUS LABELU ---
+        # Tento label chyběl, proto to házelo chybu. Přidán vedle tlačítek.
+        self.status_label = tk.Label(sub_row, text="", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['fg'])
+        self.status_label.pack(side="right", padx=10)
+        # -------------------------------------
 
         self.create_separator(content)
 
 
         # ==========================================
-        # 2. SEKCE: PERSONALIZACE (Nové "CleanDropdown")
+        # 2. SEKCE: PERSONALIZACE
         # ==========================================
         self.create_header(content, "Personalizace")
 
-        # Řádek: Motiv
         self.create_clean_setting_row(
             parent=content,
             title="Barevný motiv",
@@ -99,10 +104,9 @@ class SettingsPage(tk.Frame):
             callback=self.on_theme_change
         )
 
-        # Řádek: Jazyk
         self.create_clean_setting_row(
             parent=content,
-            title="Jazyk / Language",
+            title="Jazyk",
             desc="Změňte jazyk uživatelského rozhraní.",
             current_val=self.current_lang,
             options=["Čeština", "English", "Deutsch", "Français", "Español"],
@@ -113,27 +117,36 @@ class SettingsPage(tk.Frame):
 
 
         # ==========================================
-        # 3. SEKCE: SYSTÉM (Původní)
+        # 3. SEKCE: SYSTÉM
         # ==========================================
         self.create_header(content, "Systém")
 
         update_row = tk.Frame(content, bg=COLORS['bg_main'], pady=10)
         update_row.pack(fill='x')
 
-        tk.Label(update_row, text="Aktualizace aplikace", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(anchor="w")
+        tk.Label(update_row, text="Aktualizace aplikace", font=("Segoe UI", 11), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(anchor="w")
         tk.Label(update_row, text="Zkontrolujte dostupnost nové verze.", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(anchor="w")
 
+        # --- TLAČÍTKO ZKONTROLOVAT NYNÍ ---
         up_btn = tk.Button(update_row, text="Zkontrolovat nyní", command=self.check_update,
-                           bg=COLORS['input_bg'], fg=COLORS['fg'], font=("Segoe UI", 10),
-                           relief="flat", padx=15, pady=6, cursor="hand2")
-        up_btn.place(relx=1.0, rely=0.5, anchor="e") 
-        self.hover_effect(up_btn, COLORS['input_bg'], COLORS['item_hover'])
-
-
-        # --- STATUS BAR ---
-        self.status_label = tk.Label(content, text="", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['sub_text'], pady=20)
-        self.status_label.pack(anchor="w")
-
+                           bg=COLORS['bg_main'], fg=COLORS['fg'], font=("Segoe UI", 9),
+                           relief="flat", padx=10, pady=2, cursor="hand2", bd=0,
+                           # TOTO ODSTRANÍ BÍLÝ RÁMEČEK A ZAJISTÍ MODROU PŘI KLIKU:
+                           highlightthickness=0, 
+                           activebackground=COLORS['bg_main'], 
+                           activeforeground=COLORS['accent'])
+        up_btn.place(relx=1.0, rely=0.5, anchor="e")
+        
+        def on_up_enter(e): 
+            # Pouze změna barvy textu na modrou, pozadí zůstává
+            up_btn.config(fg=COLORS['accent'], bg=COLORS['bg_main'])
+            
+        def on_up_leave(e): 
+            # Návrat k původní barvě textu
+            up_btn.config(fg=COLORS['fg'], bg=COLORS['bg_main'])
+            
+        up_btn.bind("<Enter>", on_up_enter)
+        up_btn.bind("<Leave>", on_up_leave)
 
     # --- DESIGN HELPERY ---
 
@@ -145,78 +158,90 @@ class SettingsPage(tk.Frame):
         tk.Frame(parent, bg=COLORS['border'], height=1).pack(fill='x', pady=20)
 
     def create_clean_setting_row(self, parent, title, desc, current_val, options, callback):
-        """
-        Vytvoří řádek, kde je vpravo 'čistý' dropdown (jen text + šipka).
-        Místo Comboboxu používá Label + Menu.
-        """
         row = tk.Frame(parent, bg=COLORS['bg_main'], pady=8)
         row.pack(fill='x')
 
-        # Levá část (Popis)
         text_frame = tk.Frame(row, bg=COLORS['bg_main'])
         text_frame.pack(side="left", fill="both", expand=True)
         tk.Label(text_frame, text=title, font=("Segoe UI", 11), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(anchor="w")
         tk.Label(text_frame, text=desc, font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(anchor="w")
 
-        # Pravá část (Clean Dropdown)
-        # Vytvoříme 'falešné tlačítko' z Labelu, aby nemělo žádný border
-        
         dropdown_frame = tk.Frame(row, bg=COLORS['bg_main'], cursor="hand2", padx=5, pady=5)
         dropdown_frame.pack(side="right")
 
-        # Text hodnoty + šipka (Unicode)
-        # Např: "Dark (Default) ⌄"
-        display_text = f"{current_val}  ⌄"
+        # --- ÚPRAVA: Lepší zarovnání, větší a tenčí šipka ---
         
-        lbl_value = tk.Label(dropdown_frame, text=display_text, font=("Segoe UI", 10), 
-                             bg=COLORS['bg_main'], fg=COLORS['fg'], cursor="hand2")
-        lbl_value.pack()
+        # Label pro text vybrané hodnoty - zarovnán na střed (anchor="center")
+        lbl_text = tk.Label(dropdown_frame, text=current_val, font=("Segoe UI", 10), 
+                            bg=COLORS['bg_main'], fg=COLORS['fg'], cursor="hand2")
+        lbl_text.pack(side="left", anchor="center")
 
-        # Menu (vyskakovací seznam)
+        # Label pro šipku:
+        # 1. Změna znaku na "∨" (vypadá jako tenké V, podobné vašemu obrázku ale dolů)
+        # 2. Větší font (11) ale BEZ "bold", aby byla tenčí
+        # 3. anchor="center" pro zarovnání do stejné roviny s textem
+        lbl_arrow = tk.Label(dropdown_frame, text="∨", font=("Segoe UI", 11), 
+                             bg=COLORS['bg_main'], fg=COLORS['fg'], cursor="hand2")
+        lbl_arrow.pack(side="left", padx=(8, 0), anchor="center") 
+
+        # --------------------------------------------------------------------------
+
         menu = tk.Menu(dropdown_frame, tearoff=0, 
                        bg=COLORS['item_bg'], fg=COLORS['fg'], 
                        activebackground=COLORS['accent'], activeforeground='white',
                        bd=0, relief="flat", font=("Segoe UI", 10))
 
-        # Funkce pro výběr
         def select_option(opt):
-            lbl_value.config(text=f"{opt}  ⌄")
+            lbl_text.config(text=opt) # Aktualizujeme pouze text, šipka zůstává
             callback(opt)
 
-        # Naplnění menu
         for opt in options:
             menu.add_command(label=opt, command=lambda o=opt: select_option(o))
 
-        # Zobrazení menu při kliknutí
         def show_menu(e):
-            # Získáme souřadnice pro zobrazení menu pod labelem
             x = dropdown_frame.winfo_rootx()
             y = dropdown_frame.winfo_rooty() + dropdown_frame.winfo_height()
             menu.tk_popup(x, y)
 
-        # Hover efekty
         def on_enter(e):
-            dropdown_frame.config(bg=COLORS['item_hover'])
-            lbl_value.config(bg=COLORS['item_hover'])
+            # Změna barvy textu na modrou pro oba prvky (text i šipku)
+            lbl_text.config(fg=COLORS['accent'])
+            lbl_arrow.config(fg=COLORS['accent'])
         
         def on_leave(e):
-            dropdown_frame.config(bg=COLORS['bg_main'])
-            lbl_value.config(bg=COLORS['bg_main'])
+            lbl_text.config(fg=COLORS['fg'])
+            lbl_arrow.config(fg=COLORS['fg'])
 
-        # Binding
-        for w in [dropdown_frame, lbl_value]:
+        # Eventy navázány na frame i oba labely
+        for w in [dropdown_frame, lbl_text, lbl_arrow]:
             w.bind("<Button-1>", show_menu)
             w.bind("<Enter>", on_enter)
             w.bind("<Leave>", on_leave)
 
     def create_tool_btn(self, parent, text, cmd):
+        """
+        Vytvoří tlačítko, které vypadá jako obyčejný text.
+        Bez highlight rámečku (highlightthickness=0).
+        Při kliknutí (active) zůstává pozadí stejné a text je modrý.
+        """
         btn = tk.Button(parent, text=text, command=cmd,
-                        bg=COLORS['bg_main'], fg=COLORS['sub_text'], font=("Segoe UI", 9),
-                        relief="flat", padx=10, pady=2, cursor="hand2", bd=0)
+                        bg=COLORS['bg_main'], fg=COLORS['fg'], font=("Segoe UI", 9),
+                        relief="flat", padx=10, pady=2, cursor="hand2", bd=0,
+                        # TOTO ODSTRANÍ BÍLÝ RÁMEČEK A ZAJISTÍ MODROU PŘI KLIKU:
+                        highlightthickness=0,
+                        activebackground=COLORS['bg_main'],
+                        activeforeground=COLORS['accent'])
         btn.pack(side="right", padx=5)
         
-        def on_enter(e): btn.config(fg=COLORS['fg'], bg=COLORS['item_hover'])
-        def on_leave(e): btn.config(fg=COLORS['sub_text'], bg=COLORS['bg_main'])
+        def on_enter(e): 
+            # Změna barvy textu na modrou při najetí
+            btn.config(fg=COLORS['accent'], bg=COLORS['bg_main'])
+            
+        def on_leave(e): 
+            # Návrat k původní barvě textu při odjetí myší
+            # (funguje i po kliknutí - jakmile myš odjede, barva se vrátí)
+            btn.config(fg=COLORS['fg'], bg=COLORS['bg_main'])
+            
         btn.bind("<Enter>", on_enter)
         btn.bind("<Leave>", on_leave)
 
