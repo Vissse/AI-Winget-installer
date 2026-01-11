@@ -39,7 +39,7 @@ class HealthCheckPage(tk.Frame):
 
         self.create_tool_row(controls, "🛠️", "DISM Restore Health", 
                              "dism /online /cleanup-image /RestoreHealth", 
-                             "Hloubková oprava obrazu (DISM)...",
+                             "Hloubkové oprava obrazu (DISM)...",
                              "DISM (RestoreHealth).\nPokročilá oprava obrazu Windows.\nStáhne funkční soubory z Windows Update a opraví poškozené\nkomponenty, které SFC nedokázal vyřešit.")
         
         # Sekce Správa PC
@@ -151,7 +151,7 @@ class HealthCheckPage(tk.Frame):
         self.console.config(state="disabled")
         self.log(f"--- ZAHAJUJI: {description} ---")
         self.log(f"Příkaz: {cmd}\n")
-        # ZDE ODSTRANĚNA HLÁŠKA "Operace běží na pozadí..."
+        # Spuštění ve vlákně, aby nezamrzlo GUI
         threading.Thread(target=self._execute_thread, args=(cmd,), daemon=True).start()
 
     def _execute_thread(self, cmd):
@@ -164,6 +164,7 @@ class HealthCheckPage(tk.Frame):
             else: 
                 full_cmd = cmd 
 
+            # bufsize=0 zajistí nebufferovaný výstup
             process = subprocess.Popen(
                 full_cmd, 
                 stdout=subprocess.PIPE, 
@@ -173,20 +174,39 @@ class HealthCheckPage(tk.Frame):
                 startupinfo=startupinfo
             )
             
+            # --- ZMĚNA: Čtení po znacích místo řádků ---
+            # To umožní zachytit i aktualizace procent, které nepoužívají nový řádek (\n), ale \r
+            buffer = bytearray()
+            
             while True:
-                line_bytes = process.stdout.readline()
-                if not line_bytes and process.poll() is not None:
+                # Přečteme jeden byte
+                byte = process.stdout.read(1)
+                
+                # Pokud nic nepřišlo a proces skončil, končíme
+                if not byte and process.poll() is not None:
                     break
                 
-                if line_bytes:
-                    try:
-                        decoded_line = line_bytes.decode('cp852', errors='replace').strip()
-                    except:
-                        decoded_line = line_bytes.decode('utf-8', errors='replace').strip()
-                    
-                    if decoded_line:
-                        self.controller.after(0, lambda l=decoded_line: self.log(l))
+                if not byte:
+                    continue
+
+                # Kontrola na konec řádku (\n) nebo návrat na začátek (\r - používá SFC/DISM pro procenta)
+                if byte == b'\r' or byte == b'\n':
+                    if buffer:
+                        try:
+                            # Dekódování cp852 (CZ konzole)
+                            text = buffer.decode('cp852', errors='replace').strip()
+                        except:
+                            text = buffer.decode('utf-8', errors='replace').strip()
+                        
+                        if text:
+                            # Okamžitě poslat do GUI
+                            self.controller.after(0, lambda t=text: self.log(t))
+                        
+                        buffer = bytearray() # Vyčistit buffer pro další řádek
+                else:
+                    buffer.extend(byte)
             
+            # Zpracování konce procesu
             rc = process.poll()
             if rc == 0:
                 self.controller.after(0, lambda: self.log("\n✅ HOTOVO: Operace dokončena úspěšně."))
