@@ -21,96 +21,173 @@ class InstallerPage(tk.Frame):
         except: pass
         self.queue_data = {} 
         self.is_searching = False
+        
+        # Grid layout
         self.columnconfigure(0, weight=1, uniform="group1") 
         self.columnconfigure(1, weight=1, uniform="group1") 
-        self.rowconfigure(0, weight=0) 
-        self.rowconfigure(1, weight=0) 
-        self.rowconfigure(2, weight=1) 
-        header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=15)
+        self.rowconfigure(0, weight=0) # Header
+        self.rowconfigure(1, weight=0) # Controls
+        self.rowconfigure(2, weight=1) # Lists
+
+        # --- HLAVIČKA ---
+        header_frame = tk.Frame(self, bg=COLORS['bg_main'], pady=30, padx=20)
         header_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-        tk.Label(header_frame, text="Installer", font=("Segoe UI", 18, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(side="left", padx=20)
+        tk.Label(header_frame, text="Installer", font=("Segoe UI", 26, "bold"), bg=COLORS['bg_main'], fg="white").pack(side="left")
+
+        # --- LEVÁ ČÁST (Vyhledávání) ---
         left_controls = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
         left_controls.grid(row=1, column=0, sticky="nsew")
-        tk.Label(left_controls, text="Zadejte název programu", font=("Segoe UI", 14, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg'], anchor="w").pack(fill='x')
-        tk.Label(left_controls, text="(Nebo popište, co hledáte, např. 'úprava zvuku')", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(0, 10))
+        
+        # Nadpis sekce
+        tk.Label(left_controls, text="Vyhledávání", font=("Segoe UI", 11), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(anchor="w")
+        tk.Label(left_controls, text="Zadejte název aplikace nebo popište funkci.", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(anchor="w", pady=(0, 10))
+
+        # Search box kontejner
         search_frame = tk.Frame(left_controls, bg=COLORS['bg_main'])
         search_frame.pack(fill='x', pady=(0, 10))
+        
         search_border = tk.Frame(search_frame, bg=COLORS['input_bg'], bd=0, highlightthickness=0) 
         search_border.pack(fill='x', ipady=2)
-        self.input_entry = tk.Entry(search_border, font=("Segoe UI", 12), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
+        
+        self.input_entry = tk.Entry(search_border, font=("Segoe UI", 11), bg=COLORS['input_bg'], fg="white", insertbackground="white", relief="flat")
         self.input_entry.pack(side='left', fill='both', expand=True, padx=10)
         self.input_entry.bind('<Return>', lambda event: self.start_search())
-        self.search_btn = self.create_animated_btn(search_border, "Hledat", self.start_search, COLORS['accent'], COLORS['accent_hover'])
+        
+        # Tlačítko Hledat
+        self.search_btn = self.create_primary_btn(search_border, "Hledat", self.start_search, COLORS['accent'])
         self.search_btn.pack(side='right', fill='y', padx=2, pady=2)
+
+        # Progress bar
         style = ttk.Style()
         style.theme_use('default')
         style.configure("Horizontal.TProgressbar", background=COLORS['accent'], troughcolor=COLORS['bg_main'], borderwidth=0, thickness=2)
         self.progress = ttk.Progressbar(search_frame, orient="horizontal", mode="indeterminate", style="Horizontal.TProgressbar")
-        tk.Label(left_controls, text="Výsledky hledání:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(10, 5), side="bottom")
+        
+        tk.Label(left_controls, text="Výsledky:", font=("Segoe UI", 10, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text'], anchor="w").pack(fill='x', pady=(10, 5), side="bottom")
+
+        # --- PRAVÁ ČÁST (Fronta) ---
         right_controls = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
         right_controls.grid(row=1, column=1, sticky="sew") 
+        
         queue_header_row = tk.Frame(right_controls, bg=COLORS['bg_main'])
         queue_header_row.pack(fill='x', pady=(10, 5), side="bottom")
-        tk.Label(queue_header_row, text="Instalační fronta:", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(side="left")
+        
+        # Nadpis fronty
+        tk.Label(queue_header_row, text="Instalační fronta", font=("Segoe UI", 10, "bold"), bg=COLORS['bg_main'], fg=COLORS['sub_text']).pack(side="left")
+
+        # Akce fronty
         actions_frame = tk.Frame(queue_header_row, bg=COLORS['bg_main'])
         actions_frame.pack(side="right")
-        self.create_header_btn(actions_frame, "📂", self.import_queue, "Importovat seznam", COLORS['input_bg'], COLORS['item_hover'])
-        self.create_header_btn(actions_frame, "🗑️", self.clear_queue, "Vymazat frontu", COLORS['danger'], COLORS['danger_hover'])
-        self.create_header_btn(actions_frame, "💾", self.save_only, "Uložit .bat soubor", COLORS['input_bg'], COLORS['item_hover'])
-        self.create_header_btn(actions_frame, "🚀", self.install_now, "Instalovat vše", COLORS['success'], COLORS['success_hover'])
+        
+        # --- ZMĚNA: Tlačítka s oddělenou ikonou a textem pro lepší zarovnání ---
+        self.create_minimal_tool_btn(actions_frame, "📂", "Import", self.import_queue, COLORS['fg'])
+        self.create_minimal_tool_btn(actions_frame, "💾", "Bat", self.save_only, COLORS['fg'])
+        self.create_minimal_tool_btn(actions_frame, "🗑️", "Vymazat", self.clear_queue, COLORS['danger']) 
+        
+        # Oddělovač
+        tk.Frame(actions_frame, width=1, bg=COLORS['sub_text'], height=15).pack(side="left", padx=10)
+
+        # Primární akce
+        self.create_primary_btn(actions_frame, "🚀 Instalovat vše", self.install_now, COLORS['success']).pack(side="left")
+
+
+        # --- SEZNAMY (Listy) ---
+        
+        # 1. Výsledky hledání
         left_list_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
         left_list_frame.grid(row=2, column=0, sticky="nsew")
+        
         self.found_container = tk.Frame(left_list_frame, bg=COLORS['bg_sidebar'])
         self.found_container.pack(fill='both', expand=True, pady=(0, 20))
+        
         self.found_canvas = tk.Canvas(self.found_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
         self.found_scrollbar = ModernScrollbar(self.found_container, command=self.found_canvas.yview, bg=COLORS['bg_sidebar'])
         self.found_scrollable = tk.Frame(self.found_canvas, bg=COLORS['bg_sidebar'])
+        
         self.found_scrollable.bind("<Configure>", self.on_frame_configure)
         self.found_canvas.create_window((0, 0), window=self.found_scrollable, anchor="nw", width=480)
         self.found_canvas.configure(yscrollcommand=self.found_scrollbar.set)
+        
+        # Auto-resize
         self.found_canvas.bind("<Configure>", lambda e: self.found_canvas.itemconfig(self.found_canvas.find_all()[0], width=e.width))
+        
         self.found_canvas.pack(side="left", fill="both", expand=True)
         self.found_scrollbar.pack(side="right", fill="y")
         self._bind_mousewheel(self.found_container, self.found_canvas)
+
+        # 2. Fronta
         right_list_frame = tk.Frame(self, bg=COLORS['bg_main'], padx=20)
         right_list_frame.grid(row=2, column=1, sticky="nsew")
+        
         self.queue_container = tk.Frame(right_list_frame, bg=COLORS['bg_sidebar'])
         self.queue_container.pack(fill='both', expand=True, pady=(0, 20))
+        
         self.queue_canvas = tk.Canvas(self.queue_container, bg=COLORS['bg_sidebar'], highlightthickness=0)
         self.queue_scrollbar = ModernScrollbar(self.queue_container, command=self.queue_canvas.yview, bg=COLORS['bg_sidebar'])
         self.queue_scrollable = tk.Frame(self.queue_canvas, bg=COLORS['bg_sidebar'])
+        
         self.queue_scrollable.bind("<Configure>", lambda e: self.queue_canvas.configure(scrollregion=self.queue_canvas.bbox("all")))
         self.queue_canvas.create_window((0, 0), window=self.queue_scrollable, anchor="nw", width=480)
         self.queue_canvas.configure(yscrollcommand=self.queue_scrollbar.set)
+        
+        # Auto-resize
         self.queue_canvas.bind("<Configure>", lambda e: self.queue_canvas.itemconfig(self.queue_canvas.find_all()[0], width=e.width))
+        
         self.queue_canvas.pack(side="left", fill="both", expand=True)
         self.queue_scrollbar.pack(side="right", fill="y")
         self._bind_mousewheel(self.queue_container, self.queue_canvas)
 
+    # --- DESIGN HELPERY ---
+
+    def create_primary_btn(self, parent, text, command, bg_color):
+        """ Vytvoří ploché, výrazné tlačítko """
+        btn = tk.Button(parent, text=text, command=command, 
+                        bg=bg_color, fg="white", font=("Segoe UI", 9, "bold"), 
+                        relief="flat", padx=15, pady=6, cursor="hand2", bd=0,
+                        highlightthickness=0, 
+                        activebackground=bg_color, 
+                        activeforeground="white")
+        return btn
+
+    def create_minimal_tool_btn(self, parent, icon, text, command, hover_color):
+        """ 
+        Vytvoří 'tlačítko' složené z ikony a textu.
+        Používá Frame + 2 Labely pro perfektní vertikální zarovnání.
+        """
+        btn_frame = tk.Frame(parent, bg=COLORS['bg_main'], cursor="hand2")
+        btn_frame.pack(side="left", padx=6, anchor="center") 
+
+        # Ikona
+        lbl_icon = tk.Label(btn_frame, text=icon, font=("Segoe UI Emoji", 10), 
+                            bg=COLORS['bg_main'], fg=COLORS['sub_text'], cursor="hand2")
+        lbl_icon.pack(side="left", anchor="center")
+
+        # Text
+        lbl_text = tk.Label(btn_frame, text=text, font=("Segoe UI", 9), 
+                            bg=COLORS['bg_main'], fg=COLORS['sub_text'], cursor="hand2")
+        lbl_text.pack(side="left", padx=(3, 0), anchor="center") 
+
+        # Interaktivita
+        def on_enter(e): 
+            lbl_icon.config(fg=hover_color)
+            lbl_text.config(fg=hover_color)
+            
+        def on_leave(e): 
+            lbl_icon.config(fg=COLORS['sub_text'])
+            lbl_text.config(fg=COLORS['sub_text'])
+            
+        def on_click(e):
+            command()
+
+        for widget in [btn_frame, lbl_icon, lbl_text]:
+            widget.bind("<Enter>", on_enter)
+            widget.bind("<Leave>", on_leave)
+            widget.bind("<Button-1>", on_click)
+
+        return btn_frame
+
     def on_frame_configure(self, event):
         self.found_canvas.configure(scrollregion=self.found_canvas.bbox("all"))
-
-    def create_animated_btn(self, parent, text, command, bg_color, hover_color):
-        btn = tk.Button(parent, text=text, command=command, bg=bg_color, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", padx=15, pady=8, cursor="hand2", borderwidth=0)
-        def on_enter(e):
-            if btn['state'] != 'disabled': btn.config(bg=hover_color)
-        def on_leave(e):
-            if btn['state'] != 'disabled': btn.config(bg=bg_color)
-        btn.bind("<Enter>", on_enter)
-        btn.bind("<Leave>", on_leave)
-        return btn
-
-    def create_header_btn(self, parent, text, command, tooltip_text, bg_color, hover_color):
-        btn = tk.Button(parent, text=text, command=command, bg=bg_color, fg="white", font=("Segoe UI Emoji", 12), relief="flat", width=3, cursor="hand2", borderwidth=0)
-        btn.pack(side="left", padx=2)
-        def on_enter(e):
-            if btn['state'] != 'disabled': btn.config(bg=hover_color)
-        def on_leave(e):
-            if btn['state'] != 'disabled': btn.config(bg=bg_color)
-        btn.bind("<Enter>", on_enter)
-        btn.bind("<Leave>", on_leave)
-        ToolTip(btn, tooltip_text)
-        return btn
 
     def import_queue(self):
         file_path = filedialog.askopenfilename(filetypes=[("Text files", "*.txt"), ("Batch files", "*.bat"), ("All files", "*.*")])
@@ -140,19 +217,14 @@ class InstallerPage(tk.Frame):
         if self.is_searching: return 
         self.is_searching = True
         self.search_btn.config(cursor="arrow") 
-        # self.input_entry.delete(0, 'end') mazání vstupu
         self.progress.pack(fill='x', pady=(5, 0))
         self.progress.start(10) 
         threading.Thread(target=self.get_winget_ids_thread, args=(user_request,)).start()
 
     def get_winget_ids_thread(self, user_request):
-        # 1. Načtení klíče
         settings = SettingsManager.load_settings()
         api_key = settings.get("api_key", "")
         
-        print(f"--- FÁZE 1: Zjišťování záměru pro: '{user_request}' ---")
-        
-        # 2. Inicializace klienta (NOVÉ SDK)
         try:
             client = genai.Client(api_key=api_key)
         except Exception as e:
@@ -170,7 +242,6 @@ class InstallerPage(tk.Frame):
 
         search_terms = []
         try:
-            # NOVÉ VOLÁNÍ API
             response = client.models.generate_content(
                 model="gemini-2.5-flash", 
                 contents=intent_prompt
@@ -182,18 +253,12 @@ class InstallerPage(tk.Frame):
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
                 search_terms = [user_request]
-            print(f"AI navrhlo: {search_terms}")
-
         except Exception as e:
             print(f"Chyba AI intent: {e}")
             search_terms = [user_request]
 
-        # 2. KROK: Hromadné hledání ve Winget
-        # Spustíme hledání pro každý výraz, který AI navrhlo
         combined_output = ""
-        
         self.progress['maximum'] = len(search_terms) * 100
-        current_prog = 0
         
         for term in search_terms:
             try:
@@ -204,14 +269,6 @@ class InstallerPage(tk.Frame):
                 combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n" + result.stdout
             except: pass
             
-            # Aktualizace progress baru (jen vizuálně)
-            current_prog += 100
-            # V threadu nemůžeme přímo měnit GUI bezpečně, ale u jednoduchých proměnných to v Tkinteru často projde. 
-            # Správnější by bylo frontování, ale pro jednoduchost necháme běžet.
-
-        # 3. KROK: Finální filtrace a formátování na JSON
-        # Teď máme "špinavý" výstup z několika hledání, AI z toho musí vytáhnout to důležité.
-        
         filter_prompt = f"""
         Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
         Původní dotaz uživatele byl: "{user_request}"
@@ -239,7 +296,6 @@ class InstallerPage(tk.Frame):
         """
 
         try:
-            # NOVÉ VOLÁNÍ API
             response = client.models.generate_content(
                 model="gemini-2.5-flash", 
                 contents=filter_prompt
@@ -278,17 +334,23 @@ class InstallerPage(tk.Frame):
         name = item_data.get("name")
         app_id = item_data.get("id")
         version = item_data.get("version")
+        
         card = tk.Frame(parent_scrollable, bg=COLORS['item_bg'], pady=10, padx=10)
         card.pack(fill='x', padx=(10,0), pady=5)
+        
         icon_label = tk.Label(card, image=self.default_icon, bg=COLORS['item_bg'])
         icon_label.pack(side="left", padx=(0, 15))
         IconLoader.load_async(item_data, icon_label, self.controller)
+        
         text_frame = tk.Frame(card, bg=COLORS['item_bg'])
         text_frame.pack(side="left", fill="both", expand=True)
+        
         tk.Label(text_frame, text=name, font=("Segoe UI", 11, "bold"), bg=COLORS['item_bg'], fg="white", anchor="w").pack(fill="x")
         tk.Label(text_frame, text=f"ID: {app_id} | v{version}", font=("Segoe UI", 9), bg=COLORS['item_bg'], fg=COLORS['sub_text'], anchor="w").pack(fill="x")
+        
         action_symbol = tk.Label(card, font=("Arial", 18), bg=COLORS['item_bg'], cursor="hand2", padx=10)
         action_symbol.pack(side="right")
+        
         if is_result_mode:
             action_symbol.config(text="＋", fg=COLORS['accent'])
             action_symbol.bind("<Button-1>", lambda e, i=item_data: self.add_item_to_queue(i))
@@ -297,13 +359,14 @@ class InstallerPage(tk.Frame):
             action_symbol.config(text="✕", fg=COLORS['danger'])
             action_symbol.bind("<Button-1>", lambda e, aid=app_id: self.remove_from_queue(aid))
             self._bind_symbol_hover(action_symbol, COLORS['danger'], COLORS['fg'])
+            
         self._bind_card_hover(card, text_frame, icon_label, action_symbol)
 
     def _bind_symbol_hover(self, widget, hover_bg, hover_fg):
         normal_bg = COLORS['item_bg']
         normal_fg = widget.cget("fg")
-        def on_enter(e): widget.config(bg=hover_bg, fg=hover_fg)
-        def on_leave(e): widget.config(bg=normal_bg, fg=normal_fg)
+        def on_enter(e): widget.config(fg="white") 
+        def on_leave(e): widget.config(fg=normal_fg)
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
 

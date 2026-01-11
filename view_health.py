@@ -42,7 +42,7 @@ class HealthCheckPage(tk.Frame):
                              "Hloubková oprava obrazu (DISM)...",
                              "DISM (RestoreHealth).\nPokročilá oprava obrazu Windows.\nStáhne funkční soubory z Windows Update a opraví poškozené\nkomponenty, které SFC nedokázal vyřešit.")
         
-        # Sekce Správa PC (NOVÉ - Místo sítě a wingetu)
+        # Sekce Správa PC
         tk.Label(controls, text="Správa PC a Údržba", font=("Segoe UI", 11, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['accent']).pack(anchor="w", pady=(20, 10))
         
         self.create_tool_row(controls, "🗑️", "Smazat Temp soubory", 
@@ -150,8 +150,8 @@ class HealthCheckPage(tk.Frame):
         self.console.delete(1.0, tk.END)
         self.console.config(state="disabled")
         self.log(f"--- ZAHAJUJI: {description} ---")
-        self.log(f"Příkaz: {cmd}")
-        self.log("(Operace běží na pozadí, prosím čekejte...)\n")
+        self.log(f"Příkaz: {cmd}\n")
+        # ZDE ODSTRANĚNA HLÁŠKA "Operace běží na pozadí..."
         threading.Thread(target=self._execute_thread, args=(cmd,), daemon=True).start()
 
     def _execute_thread(self, cmd):
@@ -159,14 +159,9 @@ class HealthCheckPage(tk.Frame):
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            # 1. Změna: Odstraníme 'chcp 65001' a 'text=True'.
-            # Budeme číst surová data (bytes) a dekódovat je ručně.
-            # To často vyřeší problém, kdy Python čeká na naplnění bufferu.
-            
             if cmd.startswith("del"): 
                 full_cmd = f"cmd /c {cmd}"
             else: 
-                # Spustíme příkaz přímo, bez 'chcp'. Spoléháme na systémové kódování (cp852).
                 full_cmd = cmd 
 
             process = subprocess.Popen(
@@ -174,29 +169,19 @@ class HealthCheckPage(tk.Frame):
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT, 
                 shell=True, 
-                # bufsize=0 je klíčové pro vypnutí bufferování (jen pro binární režim)
                 bufsize=0,  
                 startupinfo=startupinfo
             )
             
-            # Čteme výstup znak po znaku nebo řádek po řádku
-            # Pro SFC/DISM je lepší číst řádky, i když progress bar (%) se ukáže až po dokončení řádku.
-            # Ale úvodní texty by se měly objevit hned.
-            
             while True:
-                # Přečteme řádek v bytech
                 line_bytes = process.stdout.readline()
-                
                 if not line_bytes and process.poll() is not None:
                     break
                 
                 if line_bytes:
-                    # Ruční dekódování (cp852 pro česká Windows, jinak cp1250 nebo utf-8)
                     try:
-                        # Zkusíme cp852 (DOS Latin 2 - standard pro CMD v CZ)
                         decoded_line = line_bytes.decode('cp852', errors='replace').strip()
                     except:
-                        # Fallback
                         decoded_line = line_bytes.decode('utf-8', errors='replace').strip()
                     
                     if decoded_line:
