@@ -1,248 +1,295 @@
-# main.py
-import tkinter as tk
 import sys
 import os
 import ctypes
-import threading
-from PIL import Image, ImageTk 
+from ctypes import windll, byref, c_int
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QListWidget, QListWidgetItem, QStackedWidget, QMessageBox, QLabel, 
+                             QPushButton, QDialog, QTextEdit, QFrame)
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QFont
 
-# Moduly
-import boot_system
-from config import COLORS, CURRENT_VERSION, THEMES
-from splash import SplashScreen
-from updater import GitHubUpdater
+import styles
+from config import COLORS
 
-# IMPORTY
+# Importy stránek
+from view_uninstaller import UninstallerPage
 from view_installer import InstallerPage
-from view_health import HealthCheckPage
 from view_settings import SettingsPage
-from view_other import UpdaterPage, PlaceholderPage
-from view_dashboard import DashboardPage
-
-boot_system.perform_boot_checks()
+from view_health import HealthCheckPage
+from view_updater import UpdaterPage
+from splash import SplashScreen
 
 def resource_path(relative_path):
+    """ Získá absolutní cestu k souboru (funguje pro dev i pro PyInstaller exe) """
     try:
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-class MainApplication(tk.Tk):
+def is_admin():
+    try: return ctypes.windll.shell32.IsUserAnAdmin()
+    except: return False
+
+# --- OKNO S NÁPOVĚDOU ---
+class HelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Jak používat aplikaci")
+        self.setFixedSize(600, 500)
+        self.setStyleSheet(f"background-color: {COLORS['bg_main']}; color: {COLORS['fg']};")
+
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("📖 Průvodce aplikací")
+        title.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['accent']}; margin-bottom: 10px;")
+        layout.addWidget(title)
+
+        # Textové pole s vysvětlením
+        text_area = QTextEdit()
+        text_area.setReadOnly(True)
+        text_area.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {COLORS['bg_sidebar']}; 
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 14px;
+                color: #ddd;
+            }}
+        """)
+        
+        html_content = f"""
+        <h3 style="color: {COLORS['accent']}">📦 Chytrá instalace aplikací</h3>
+        <p>Umožňuje vyhledávat a hromadně instalovat aplikace pomocí AI a Winget. Můžete si vytvořit frontu a nainstalovat vše naraz.</p>
+        
+        <h3 style="color: {COLORS['accent']}">🔄 Aktualizace aplikací</h3>
+        <p>Zkontroluje všechny nainstalované programy v PC a nabídne hromadnou aktualizaci na nejnovější verze.</p>
+        
+        <h3 style="color: {COLORS['accent']}">🩺 Kontrola stavu PC</h3>
+        <p>Analyzuje zdraví systému (disk, baterie, RAM) a navrhne optimalizace (SFC scan, DISM).</p>
+        
+        <h3 style="color: {COLORS['accent']}">🗑️ Odinstalace aplikací</h3>
+        <p>Čisté odstranění programů včetně zbytků, které běžný odinstalátor často nechává.</p>
+        
+        <hr>
+        <p><i>Tip: V Nastavení si můžete upravit chování instalátoru (tichý režim, instalace pro všechny uživatele).</i></p>
+        """
+        text_area.setHtml(html_content)
+        layout.addWidget(text_area)
+
+        btn_ok = QPushButton("Rozumím")
+        btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['accent']}; color: white; border: none;
+                padding: 10px; border-radius: 5px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}
+        """)
+        btn_ok.clicked.connect(self.accept)
+        layout.addWidget(btn_ok)
+
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.withdraw() 
-        self.title("AI Winget Installer")
+        self.setWindowTitle("Univerzální aplikace")
+        self.resize(1150, 750)
         
-        # AppID pro správnou ikonu na taskbaru
-        try:
-            myappid = 'mycompany.aiwinget.installer.v6'
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except Exception: pass
+        # 1. IKONA
+        icon_path = resource_path("program_icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        else:
+            self.setWindowIcon(QIcon.fromTheme("system-software-install"))
+        
+        self.apply_custom_title_bar()
 
-        # Ikona
         try:
-            image_path = resource_path("program_icon.png")
-            if os.path.exists(image_path):
-                original_image = Image.open(image_path)
-                window_icon = ImageTk.PhotoImage(original_image)
-                self.iconphoto(True, window_icon)
-                resized_image = original_image.resize((32, 32), Image.Resampling.LANCZOS)
-                self.app_icon = ImageTk.PhotoImage(resized_image)
-        except Exception: pass
-
-        w, h = 1175, 750
-        ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
-        x = int((ws/2) - (w/2))
-        y = int((hs/2) - (h/2))
-        self.geometry(f'{w}x{h}+{x}+{y}')
+            self.setStyleSheet(styles.get_stylesheet())
+        except Exception as e:
+            print(f"Chyba stylů: {e}")
 
         # Hlavní kontejner
-        self.container = tk.Frame(self, bg=COLORS['bg_main'])
-        self.container.pack(fill='both', expand=True)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # ============================================================
+        # 1. LEVÝ PANEL (SIDEBAR CONTAINER)
+        # ============================================================
+        sidebar_container = QWidget()
+        sidebar_container.setFixedWidth(260)
+        sidebar_container.setStyleSheet(f"background-color: {COLORS['bg_sidebar']}; border-right: 1px solid {COLORS['border']};")
         
-        # Grid konfigurace: Sloupec 0 je Sidebar (začíná na 0px), Sloupec 1 je Obsah
-        self.container.grid_columnconfigure(0, weight=0, minsize=0) 
-        self.container.grid_columnconfigure(1, weight=1)              
-        self.container.grid_rowconfigure(0, weight=1)
+        sidebar_layout = QVBoxLayout(sidebar_container)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
 
-        self.create_interface()
-        SplashScreen(self, on_complete=self.run_startup_update_check)
-
-    def create_interface(self):
-        self.configure(bg=COLORS['bg_main'])
-        self.apply_window_theme()
-
-        # --- 1. SIDEBAR (Skrytý při startu - width=0) ---
-        self.sidebar = tk.Frame(self.container, bg=COLORS['bg_sidebar'], width=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_propagate(False) # Důležité: obsah neroztáhne sidebar
-        self.sidebar.pack_propagate(False)
-
-        # Obsah Sidebaru
-        ver_label = tk.Label(self.sidebar, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 8), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text'])
-        ver_label.pack(side="bottom", pady=20)
-
-        # Profil
-        self.create_profile_section()
-
-        tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=(10, 20))
-
-        # Menu tlačítka
-        self.menu_buttons = {}
+        # A) Horní seznam (Funkce)
+        self.sidebar_list = QListWidget()
+        self.sidebar_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sidebar_list.setStyleSheet(f"""
+            QListWidget {{ background-color: transparent; border: none; outline: none; margin-top: 10px; }}
+            QListWidget::item {{ padding: 15px 10px; margin: 2px 10px; border-radius: 6px; color: {COLORS['sub_text']}; font-weight: 500; }}
+            QListWidget::item:selected {{ background-color: {COLORS['item_bg']}; color: {COLORS['fg']}; border-left: 3px solid {COLORS['accent']}; }}
+            QListWidget::item:hover {{ background-color: {COLORS['item_hover']}; color: {COLORS['fg']}; }}
+        """)
+        self.sidebar_list.currentRowChanged.connect(self.switch_main_page)
         
-        # --- ODSTRANĚNO TLAČÍTKO DOMŮ ---
-        # Nyní začínáme rovnou nástroji
+        self.add_sidebar_item("📦  Chytrá instalace aplikací")
+        self.add_sidebar_item("🔄  Aktualizace aplikací")
+        self.add_sidebar_item("🩺  Kontrola stavu PC")
+        self.add_sidebar_item("🗑️  Odinstalace aplikací")
         
-        self.create_menu_item("installer", "📦  Installer")
-        self.create_menu_item("updater", "🔄  Updater")
-        self.create_menu_item("health", "🩺  Health Check")
-        self.create_menu_item("upcoming", "📅  Upcoming")
+        sidebar_layout.addWidget(self.sidebar_list)
+
+        # B) Spacer (Tlačí tlačítka dolů)
+        sidebar_layout.addStretch()
+
+        # C) Oddělovač
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background-color: {COLORS['border']}; margin: 10px 15px;")
+        sidebar_layout.addWidget(sep)
+
+        # D) Spodní tlačítka (Nastavení + Nápověda)
+        bottom_buttons_layout = QHBoxLayout()
+        bottom_buttons_layout.setContentsMargins(15, 0, 15, 20)
+        bottom_buttons_layout.setSpacing(10)
+
+        # Tlačítko Nastavení
+        self.btn_settings = QPushButton("⚙️ Nastavení")
+        self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_settings.setFixedHeight(40)
+        self.btn_settings.clicked.connect(self.go_to_settings)
+        self._style_bottom_btn(self.btn_settings)
         
-        tk.Frame(self.sidebar, bg=COLORS['border'], height=1).pack(fill='x', padx=15, pady=20)
+        # Tlačítko Nápověda (Otazník)
+        self.btn_help = QPushButton("❓")
+        self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_help.setFixedSize(40, 40)
+        self.btn_help.setToolTip("Vysvětlivka funkcí")
+        self.btn_help.clicked.connect(self.show_help)
+        self._style_bottom_btn(self.btn_help)
+
+        bottom_buttons_layout.addWidget(self.btn_settings, stretch=1)
+        bottom_buttons_layout.addWidget(self.btn_help, stretch=0)
         
-        tk.Label(self.sidebar, text="Moje Projekty", font=("Segoe UI", 9, "bold"), bg=COLORS['bg_sidebar'], fg=COLORS['sub_text']).pack(anchor="w", padx=20, pady=(0, 10))
-        self.create_project_item("#  Winget Tools", 12)
-        self.create_project_item("#  Gaming", 5)
+        sidebar_layout.addLayout(bottom_buttons_layout)
 
-        # --- 2. CONTENT AREA ---
-        self.content_area = tk.Frame(self.container, bg=COLORS['bg_main'])
-        self.content_area.grid(row=0, column=1, sticky="nsew")
-        
-        # Views
-        self.views = {}
-        self.views["all_apps"] = DashboardPage(self.content_area, self)
-        self.views["installer"] = InstallerPage(self.content_area, self)
-        self.views["updater"] = UpdaterPage(self.content_area, self)
-        self.views["health"] = HealthCheckPage(self.content_area, self)
-        self.views["upcoming"] = PlaceholderPage(self.content_area, "Upcoming Updates", "📅")
-        self.views["settings"] = SettingsPage(self.content_area, self)
+        # Přidání sidebaru do hlavního okna
+        main_layout.addWidget(sidebar_container)
 
-        # START NA DASHBOARDU (bez sidebaru)
-        self.switch_view("all_apps", initial=True)
+        # ============================================================
+        # 2. PRAVÝ OBSAH (PAGES)
+        # ============================================================
+        self.pages = QStackedWidget()
+        main_layout.addWidget(self.pages)
 
-    def create_profile_section(self):
-        profile_frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], pady=20, padx=15, cursor="hand2")
-        profile_frame.pack(fill='x', side="top")
-        
-        icon_size = 36
-        cv = tk.Canvas(profile_frame, width=icon_size, height=icon_size, bg=COLORS['bg_sidebar'], highlightthickness=0, cursor="hand2")
-        cv.pack(side="left")
-        
-        default_user_color = "#555555" if COLORS['bg_sidebar'] == "#ffffff" else "#888888"
-        user_oval = cv.create_oval(8, 2, 28, 22, fill=default_user_color, outline="")
-        user_arc = cv.create_arc(2, 20, 34, 50, start=0, extent=180, fill=default_user_color, outline="")
-
-        lbl_user = tk.Label(profile_frame, text="Uživatel", font=("Segoe UI", 11, "bold"), 
-                            bg=COLORS['bg_sidebar'], fg=COLORS['fg'], cursor="hand2")
-        lbl_user.pack(side="left", padx=12)
-        
-        def go_to_settings(e): self.switch_view("settings")
-        def on_enter(e): 
-            lbl_user.config(fg=COLORS['accent']) 
-            cv.itemconfig(user_oval, fill=COLORS['accent'])
-            cv.itemconfig(user_arc, fill=COLORS['accent'])
-        def on_leave(e): 
-            lbl_user.config(fg=COLORS['fg'])     
-            cv.itemconfig(user_oval, fill=default_user_color)
-            cv.itemconfig(user_arc, fill=default_user_color)
-
-        for w in [profile_frame, cv, lbl_user]:
-            w.bind("<Button-1>", go_to_settings)
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave)
-
-    # --- PŘEPÍNÁNÍ POHLEDŮ ---
-
-    def open_view_from_dashboard(self, view_name):
-        """Voláno z Dashboardu po kliknutí na kartu."""
-        self.switch_view(view_name)
-
-    def switch_view(self, view_name, initial=False):
-        self.current_view = view_name
-        
-        # LOGIKA SIDEBARU
-        if view_name == "all_apps":
-            # Skrýt sidebar
-            self.container.grid_columnconfigure(0, minsize=0)
-            self.sidebar.configure(width=0)
-        else:
-            # Zobrazit sidebar
-            self.container.grid_columnconfigure(0, minsize=250)
-            self.sidebar.configure(width=250)
-
-        # Aktualizace menu tlačítek (zvýraznění aktivního)
-        for name, btn in self.menu_buttons.items():
-            if name == view_name:
-                btn.config(bg=COLORS['sidebar_active'], fg=COLORS['accent'], font=("Segoe UI", 10, "bold"))
-            else:
-                btn.config(bg=COLORS['bg_sidebar'], fg=COLORS['fg'], font=("Segoe UI", 10))
-        
-        # Přepnutí obsahu
-        for v in self.views.values():
-            v.pack_forget()
-        
-        if view_name in self.views:
-            self.views[view_name].pack(fill='both', expand=True)
-
-    # --- POMOCNÉ METODY ---
-
-    def create_menu_item(self, view_name, text):
-        btn = tk.Button(self.sidebar, text=text, font=("Segoe UI", 10), 
-                        bg=COLORS['bg_sidebar'], fg=COLORS['fg'], 
-                        activebackground=COLORS['sidebar_active'], activeforeground=COLORS['fg'],
-                        relief="flat", anchor="w", padx=20, pady=6, cursor="hand2", bd=0)
-        btn.pack(fill='x', padx=5, pady=1)
-        btn.config(command=lambda: self.switch_view(view_name))
-        
-        self.menu_buttons[view_name] = btn
-        btn.bind("<Enter>", lambda e: self.on_menu_hover(view_name, True))
-        btn.bind("<Leave>", lambda e: self.on_menu_hover(view_name, False))
-
-    def create_project_item(self, text, count):
-        frame = tk.Frame(self.sidebar, bg=COLORS['bg_sidebar'], cursor="hand2")
-        frame.pack(fill='x', padx=5, pady=1)
-        lbl_text = tk.Label(frame, text=text, font=("Segoe UI", 10), bg=COLORS['bg_sidebar'], fg="#aaa" if COLORS['bg_sidebar']!='#ffffff' else '#666', anchor="w")
-        lbl_text.pack(side="left", padx=15, pady=6)
-        lbl_count = tk.Label(frame, text=str(count), font=("Segoe UI", 9), bg=COLORS['bg_sidebar'], fg="#666")
-        lbl_count.pack(side="right", padx=10)
-        def enter(e): frame.config(bg=COLORS['sidebar_hover'])
-        def leave(e): frame.config(bg=COLORS['bg_sidebar'])
-        frame.bind("<Enter>", enter)
-        frame.bind("<Leave>", leave)
-
-    def on_menu_hover(self, view_name, is_hovering):
-        if self.current_view == view_name: return 
-        btn = self.menu_buttons[view_name]
-        btn.config(bg=COLORS['sidebar_hover'] if is_hovering else COLORS['bg_sidebar'])
-
-    def run_startup_update_check(self):
-        updater = GitHubUpdater(self)
-        threading.Thread(target=lambda: updater.check_for_updates(silent=True, on_continue=self.deiconify), daemon=True).start()
-
-    def update_theme(self, theme_name):
-        if theme_name in THEMES:
-            COLORS.update(THEMES[theme_name])
-            for widget in self.container.winfo_children(): widget.destroy()
-            self.create_interface()
-
-    def apply_window_theme(self):
+        # Index 0: Installer
+        self.pages.addWidget(InstallerPage())          
+        # Index 1: Updater
+        self.pages.addWidget(UpdaterPage())            
+        # Index 2: Health
+        self.pages.addWidget(HealthCheckPage())        
+        # Index 3: Uninstaller
         try:
-            from ctypes import windll, byref, c_int
-            self.update() 
-            hwnd = windll.user32.GetParent(self.winfo_id())
-            def hex_to_colorref(hex_str):
-                clean_hex = hex_str.lstrip('#')
-                r = int(clean_hex[0:2], 16); g = int(clean_hex[2:4], 16); b = int(clean_hex[4:6], 16)
-                return b | (g << 8) | (r << 16)
-            target_color = COLORS['bg_sidebar'] 
-            text_color = "#ffffff" if COLORS['bg_sidebar'] != "#ffffff" else "#000000"
-            is_dark = 1 if COLORS['bg_sidebar'] != "#ffffff" else 0
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(hex_to_colorref(target_color))), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(hex_to_colorref(text_color))), 4)
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(is_dark)), 4)
-        except: pass
+            self.pages.addWidget(UninstallerPage())    
+        except Exception as e:
+            self.pages.addWidget(QLabel(f"Chyba odinstalace: {e}"))
+        
+        # Index 4: Settings (Už není v listu nahoře)
+        self.pages.addWidget(SettingsPage())           
+
+        # Výchozí stav
+        self.sidebar_list.setCurrentRow(0)
+
+    # --- METODY ---
+
+    def add_sidebar_item(self, text):
+        item = QListWidgetItem(text)
+        self.sidebar_list.addItem(item)
+
+    def switch_main_page(self, index):
+        """Přepíná mezi hlavními funkcemi (0-3)."""
+        if index >= 0:
+            self.pages.setCurrentIndex(index)
+            # Resetovat styl tlačítka nastavení (aby nevypadalo aktivně)
+            self._style_bottom_btn(self.btn_settings, active=False)
+            self._style_bottom_btn(self.btn_help, active=False)
+
+    def go_to_settings(self):
+        """Přepne na stránku nastavení (Index 4) a odznačí seznam funkcí."""
+        self.sidebar_list.clearSelection() # Zruší výběr nahoře
+        self.pages.setCurrentIndex(4)      # Přepne na nastavení
+        self._style_bottom_btn(self.btn_settings, active=True) # Zvýrazní tlačítko
+
+    def show_help(self):
+        """Otevře dialog s nápovědou."""
+        dialog = HelpDialog(self)
+        dialog.exec()
+
+    def _style_bottom_btn(self, btn, active=False):
+        """Styluje spodní tlačítka."""
+        bg_color = COLORS['item_bg'] if active else "transparent"
+        border = f"1px solid {COLORS['accent']}" if active else "none"
+        text_color = "white" if active else COLORS['sub_text']
+        
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: {border};
+                border-radius: 6px;
+                font-weight: bold;
+                text-align: center;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['item_hover']};
+                color: white;
+            }}
+        """)
+
+    def apply_custom_title_bar(self):
+        """Tmavá lišta pro Windows 11/10."""
+        try:
+            hwnd = self.winId().__int__() 
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            DWMWA_CAPTION_COLOR = 35 
+            DWMWA_TEXT_COLOR = 36
+            
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, byref(c_int(1)), 4)
+
+            hex_color = COLORS['bg_sidebar']
+            r = int(hex_color[1:3], 16)
+            g = int(hex_color[3:5], 16)
+            b = int(hex_color[5:7], 16)
+            colorref = b << 16 | g << 8 | r
+
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, byref(c_int(colorref)), 4)
+            
+            white_ref = 255 << 16 | 255 << 8 | 255
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, byref(c_int(white_ref)), 4)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
-    app = MainApplication()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    
+    splash = SplashScreen()
+    splash.show()
+
+    if not is_admin():
+        pass
+
+    def start_main_app():
+        global window
+        window = MainWindow()
+        window.show()
+    
+    splash.finished.connect(start_main_app)
+    sys.exit(app.exec())

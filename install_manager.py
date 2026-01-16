@@ -1,105 +1,148 @@
 # install_manager.py
-import tkinter as tk
-from tkinter import scrolledtext, ttk
-import threading
-import subprocess
-import queue
 import os
 import shutil
+import subprocess
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                             QProgressBar, QTextEdit, QPushButton, QWidget)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint
+from PyQt6.QtGui import QMouseEvent, QTextCursor
+
 from config import COLORS
+from settings_manager import SettingsManager # IMPORT NASTAVENÍ
 
-class InstallationDialog:
-    def __init__(self, parent, install_list):
-        self.top = tk.Toplevel(parent)
-        self.top.title("Průběh instalace")
-        window_width = 700
-        window_height = 550
-        screen_width = parent.winfo_screenwidth()
-        screen_height = parent.winfo_screenheight()
-        x_cordinate = int((screen_width/2) - (window_width/2))
-        y_cordinate = int((screen_height/2) - (window_height/2))
-        self.top.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-        self.top.configure(bg=COLORS['bg_main'])
-        
+# --- PRACOVNÍ VLÁKNO (Instalace na pozadí) ---
+class InstallationWorker(QThread):
+    log_signal = pyqtSignal(str)           
+    status_signal = pyqtSignal(str)        
+    progress_signal = pyqtSignal(int)      
+    finished_signal = pyqtSignal(list)     
+
+    def __init__(self, install_list):
+        super().__init__()
         self.install_list = install_list
-        self.total_apps = len(install_list)
-        self.current_app_index = 0
-        self.failed_apps = []
         self.is_running = True
-        self.msg_queue = queue.Queue()
-
-        self.title_label = tk.Label(self.top, text="🚀 Příprava instalace...", font=("Segoe UI", 16, "bold"), bg=COLORS['bg_main'], fg="white")
-        self.title_label.pack(pady=(20, 10))
-
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure("Green.Horizontal.TProgressbar", background=COLORS['success'], troughcolor=COLORS['input_bg'], borderwidth=0, thickness=20)
         
-        self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(self.top, variable=self.progress_var, maximum=self.total_apps, style="Green.Horizontal.TProgressbar")
-        self.progress_bar.pack(fill='x', padx=30, pady=10)
+        # Načtení nastavení uživatele
+        self.settings = SettingsManager.load_settings()
 
-        info_frame = tk.Frame(self.top, bg=COLORS['bg_main'])
-        info_frame.pack(fill='x', padx=30)
-        self.status_label = tk.Label(info_frame, text=f"Inicializace...", font=("Segoe UI", 11), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
-        self.status_label.pack(side='left')
+    def run(self):
+        failed_apps = []
+        total = len(self.install_list)
 
-        tk.Label(self.top, text="Detailní výpis:", font=("Segoe UI", 10, "bold"), bg=COLORS['bg_main'], fg="#555").pack(pady=(20, 5), anchor="w", padx=30)
-        self.text_area = scrolledtext.ScrolledText(self.top, font=("Consolas", 9), bg="#111", fg="#cccccc", insertbackground="white", relief="flat", height=15, highlightthickness=1, highlightbackground=COLORS['border'])
-        self.text_area.pack(fill='both', expand=True, padx=30, pady=(0, 10))
+        # 1. Aktualizace zdrojů
+        self.status_signal.emit("Aktualizace databáze Winget...")
+        self.log_signal.emit("--- AKTUALIZACE ZDROJŮ WINGET ---\n")
+        try:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            subprocess.run('winget source update', shell=True, startupinfo=startupinfo, creationflags=0x08000000)
+            self.log_signal.emit(">>> Databáze úspěšně aktualizována.\n\n")
+        except Exception as e:
+            self.log_signal.emit(f"Warning: Aktualizace zdrojů selhala ({str(e)}), pokračuji...\n\n")
 
-        self.close_btn = tk.Button(self.top, text="Zrušit", command=self.close_window, bg=COLORS['danger'], fg="white", font=("Segoe UI", 10), relief="flat", padx=25, pady=8, cursor="hand2")
-        self.close_btn.pack(pady=15)
-        
-        def on_enter(e): self.close_btn.config(bg=COLORS['danger_hover'])
-        def on_leave(e): self.close_btn.config(bg=COLORS['danger'])
-        self.close_btn.bind("<Enter>", on_enter)
-        self.close_btn.bind("<Leave>", on_leave)
+        self.log_signal.emit("--- ZAHAJUJI HROMADNOU INSTALACI ---\n")
+        self.log_signal.emit(f"Konfigurace: Scope={self.settings.get('winget_scope', 'machine')}, Mode={self.settings.get('winget_mode', 'silent')}\n")
 
-        threading.Thread(target=self.run_installation_sequence, daemon=True).start()
-        self.check_queue()
+        # 2. Instalace aplikací
+        for i, app_data in enumerate(self.install_list):
+            if not self.is_running: break
+            
+            app_name = app_data['name']
+            app_id = app_data['id'].strip()
+            
+            self.status_signal.emit(f"Instaluji: {app_name}")
+            self.log_signal.emit(f"\n>>> Instaluji: {app_name} ({app_id})...\n")
 
-    def close_window(self):
-        self.is_running = False
-        self.top.destroy()
+            # --- DYNAMICKÉ SESTAVENÍ PŘÍKAZU PODLE NASTAVENÍ ---
+            args = []
+            
+            # ID
+            args.append(f'--id "{app_id}"')
+            
+            # Režim (Silent / Interactive)
+            if self.settings.get("winget_mode", "silent") == "silent":
+                args.append('--silent')
+                args.append('--disable-interactivity')
+            else:
+                args.append('--interactive')
 
-    def check_queue(self):
-        while not self.msg_queue.empty():
+            # Scope (Machine / User)
+            scope = self.settings.get("winget_scope", "machine")
+            args.append(f'--scope {scope}')
+
+            #NOVÉ: Location (Vlastní cesta)
+            custom_location = self.settings.get("winget_location", "")
+            if custom_location:
+                # Cestu musíme obalit uvozovkami pro případ mezer
+                args.append(f'--location "{custom_location}"')
+
+            # Force
+            if self.settings.get("winget_force", True):
+                args.append('--force')
+
+            # Agreements
+            if self.settings.get("winget_agreements", True):
+                args.append('--accept-package-agreements')
+                args.append('--accept-source-agreements')
+
+            # Finální příkaz
+            cmd = f'winget install {" ".join(args)}'
+            
+            # Pro jistotu vypíšeme příkaz do logu (užitečné pro debug)
+            # self.log_signal.emit(f"CMD: {cmd}\n") 
+
             try:
-                msg_type, content = self.msg_queue.get_nowait()
-                if msg_type == "LOG":
-                    self.text_area.insert(tk.END, content)
-                    self.text_area.see(tk.END)
-                elif msg_type == "STATUS":
-                    self.title_label.config(text=f"Právě instaluji: {content}")
-                elif msg_type == "PROGRESS":
-                    self.current_app_index = content
-                    self.progress_var.set(content)
-                    self.update_status_labels()
-                elif msg_type == "DONE":
-                    self.finish_installation()
-                elif msg_type == "ERROR":
-                    self.text_area.insert(tk.END, f"\n!!! CHYBA: {content} !!!\n", "error")
-                    self.text_area.tag_config("error", foreground="#ff5555")
-                elif msg_type == "FAIL_RECORD":
-                    self.failed_apps.append(content)
-            except queue.Empty: break
-        
-        if self.is_running:
-            self.top.after(100, self.check_queue)
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+                process = subprocess.Popen(
+                    cmd, shell=True, 
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                    text=True, encoding='cp852', errors='replace',
+                    startupinfo=startupinfo, creationflags=0x08000000
+                )
 
-    def update_status_labels(self):
-        self.status_label.config(text=f"Zpracováno {self.current_app_index} z {self.total_apps} aplikací")
+                for line in process.stdout:
+                    if not self.is_running:
+                        process.terminate()
+                        break
+                    
+                    clean_line = line.strip()
+                    if not clean_line: continue
+                    if any(x in clean_line for x in ['\\', '|', '/', '-', 'MB /', 'kB /', '%', '██']):
+                        continue
+                        
+                    self.log_signal.emit(clean_line + "\n")
+
+                process.wait()
+
+                if process.returncode == 0:
+                    self.log_signal.emit(f"✅ {app_name} úspěšně nainstalován.\n")
+                    self.create_desktop_shortcut(app_name)
+                else:
+                    self.log_signal.emit(f"❌ Chyba při instalaci {app_name} (kód {process.returncode}).\n")
+                    failed_apps.append(app_name)
+
+            except Exception as e:
+                self.log_signal.emit(f"❌ Kritická chyba: {str(e)}\n")
+                failed_apps.append(app_name)
+
+            self.progress_signal.emit(i + 1)
+
+        self.finished_signal.emit(failed_apps)
 
     def create_desktop_shortcut(self, app_name):
+        """Pokusí se najít nainstalovanou aplikaci a zkopírovat zástupce na plochu."""
         try:
             start_menu_paths = [
                 os.path.join(os.environ['APPDATA'], r'Microsoft\Windows\Start Menu\Programs'),
                 os.path.join(os.environ['PROGRAMDATA'], r'Microsoft\Windows\Start Menu\Programs')
             ]
             desktop_path = os.path.join(os.environ['USERPROFILE'], 'Desktop')
+            
             search_terms = app_name.split()
             search_query = search_terms[0] if len(search_terms) > 0 else app_name
+            
             found = False
             for path in start_menu_paths:
                 for root, dirs, files in os.walk(path):
@@ -108,72 +151,211 @@ class InstallationDialog:
                             src_file = os.path.join(root, file)
                             dst_file = os.path.join(desktop_path, file)
                             shutil.copy2(src_file, dst_file)
-                            self.msg_queue.put(("LOG", f"➕ Vytvořen zástupce na ploše: {file}\n"))
+                            self.log_signal.emit(f"➕ Vytvořen zástupce na ploše: {file}\n")
                             found = True
                             break 
                     if found: break
                 if found: break
         except Exception as e:
-            self.msg_queue.put(("LOG", f"(Chyba při tvorbě zástupce: {e})\n"))
+            self.log_signal.emit(f"(Info: Zástupce nevytvořen: {e})\n")
 
-    def run_installation_sequence(self):
-        self.msg_queue.put(("STATUS", "Aktualizace databáze..."))
-        self.msg_queue.put(("LOG", "--- AKTUALIZACE ZDROJŮ WINGET ---\n"))
-        try:
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            subprocess.run('winget source update', shell=True, startupinfo=startupinfo, creationflags=subprocess.CREATE_NO_WINDOW)
-            self.msg_queue.put(("LOG", ">>> Databáze úspěšně aktualizována.\n\n"))
-        except Exception as e:
-            self.msg_queue.put(("LOG", f"Warning: Aktualizace zdrojů selhala ({str(e)}), pokračuji...\n\n"))
-
-        self.msg_queue.put(("LOG", "--- ZAHAJUJI HROMADNOU INSTALACI ---\n"))
-        for i, app_data in enumerate(self.install_list):
-            if not self.is_running: break
-            app_name = app_data['name']
-            app_id = app_data['id'].strip()
-            self.msg_queue.put(("STATUS", app_name))
-            self.msg_queue.put(("LOG", f"\n>>> Instaluji: {app_name} ({app_id})...\n"))
-            
-            cmd = f'winget install --id "{app_id}" --silent --accept-package-agreements --accept-source-agreements --force --disable-interactivity'
-            try:
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='cp852', errors='replace', startupinfo=startupinfo)
-                for line in process.stdout:
-                    if not self.is_running: 
-                        process.terminate(); break
-                    clean_line = line.replace('\r', '').replace('\n', '').replace('\b', '')
-                    stripped_line = clean_line.strip()
-                    if not stripped_line: continue
-                    if stripped_line in ['\\', '|', '/', '-']: continue
-                    if "MB /" in stripped_line or "kB /" in stripped_line or "%" in stripped_line or "██" in stripped_line: continue
-                    self.msg_queue.put(("LOG", clean_line + "\n"))
-                process.wait()
-                if process.returncode == 0:
-                    self.msg_queue.put(("LOG", f"✅ {app_name} úspěšně nainstalován.\n"))
-                    self.create_desktop_shortcut(app_name)
-                else:
-                    self.msg_queue.put(("ERROR", f"❌ Chyba při instalaci {app_name} (kód {process.returncode}).\n"))
-                    self.msg_queue.put(("FAIL_RECORD", app_name))
-            except Exception as e:
-                self.msg_queue.put(("ERROR", str(e)))
-                self.msg_queue.put(("FAIL_RECORD", app_name))
-            self.msg_queue.put(("PROGRESS", i + 1))
-        self.msg_queue.put(("DONE", None))
-
-    def finish_installation(self):
+    def stop(self):
         self.is_running = False
-        self.progress_var.set(self.total_apps)
-        self.close_btn.config(text="Zavřít", bg=COLORS['success'], command=self.top.destroy)
-        def on_enter(e): self.close_btn.config(bg=COLORS['success_hover'])
-        def on_leave(e): self.close_btn.config(bg=COLORS['success'])
-        self.close_btn.bind("<Enter>", on_enter)
-        self.close_btn.bind("<Leave>", on_leave)
-        if len(self.failed_apps) == 0:
-            self.title_label.config(text="HOTOVO! Vše nainstalováno.", fg=COLORS['success'])
-            self.status_label.config(text="Instalace dokončena bez chyb.")
+
+
+# --- DIALOGOVÉ OKNO (UI) - ZŮSTÁVÁ STEJNÉ JAKO PŘEDTÍM ---
+class InstallationDialog(QDialog):
+    def __init__(self, install_list, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(700, 550)
+        self.old_pos = None
+
+        self.install_list = install_list
+
+        # --- HLAVNÍ KONTEJNER ---
+        self.container = QWidget(self)
+        self.container.setObjectName("MainContainer")
+        self.container.setGeometry(0, 0, 700, 550)
+        self.container.setStyleSheet(f"""
+            #MainContainer {{
+                background-color: {COLORS['bg_main']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+        
+        main_layout = QVBoxLayout(self.container)
+        main_layout.setContentsMargins(1, 1, 1, 1) 
+        main_layout.setSpacing(0)
+
+        # --- 1. HORNÍ LIŠTA ---
+        title_bar = QWidget()
+        title_bar.setObjectName("TitleBar")
+        title_bar.setFixedHeight(45)
+        title_bar.setStyleSheet(f"""
+            #TitleBar {{
+                background-color: {COLORS['bg_sidebar']};
+                border-bottom: 1px solid {COLORS['border']};
+                border-top-left-radius: 7px;
+                border-top-right-radius: 7px;
+            }}
+        """)
+        title_layout = QHBoxLayout(title_bar)
+        
+        lbl_icon = QLabel("🚀")
+        lbl_icon.setStyleSheet("font-size: 16px; background: transparent; border: none;")
+        lbl_title = QLabel("Průběh instalace")
+        lbl_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px; background: transparent; border: none;")
+        
+        title_layout.addWidget(lbl_icon)
+        title_layout.addWidget(lbl_title)
+        title_layout.addStretch()
+
+        main_layout.addWidget(title_bar)
+
+        # --- 2. OBSAH ---
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(30, 20, 30, 20)
+        content_layout.setSpacing(15)
+
+        # Status Label
+        self.lbl_status = QLabel("Příprava instalace...")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;")
+        content_layout.addWidget(self.lbl_status)
+
+        # Progress Bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, len(install_list))
+        self.progress.setValue(0)
+        self.progress.setFixedHeight(25)
+        self.progress.setTextVisible(True)
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {COLORS['input_bg']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                color: white;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS['success']};
+                border-radius: 3px;
+            }}
+        """)
+        content_layout.addWidget(self.progress)
+
+        # Log Area
+        lbl_log = QLabel("Detailní výpis:")
+        lbl_log.setStyleSheet("color: #888; margin-top: 10px;")
+        content_layout.addWidget(lbl_log)
+
+        self.txt_log = QTextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: #111; 
+                color: #ccc; 
+                border: 1px solid {COLORS['border']};
+                font-family: Consolas, monospace;
+                border-radius: 4px;
+                padding: 5px;
+            }}
+            QScrollBar:vertical {{
+                border: none;
+                background-color: #111;
+                width: 8px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: #444;
+                min-height: 20px;
+                border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background-color: {COLORS['accent']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+        """)
+        content_layout.addWidget(self.txt_log)
+
+        # Tlačítko Zrušit/Zavřít
+        self.btn_action = QPushButton("Zrušit instalaci")
+        self.btn_action.setFixedSize(200, 45)
+        self.btn_action.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_action.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['danger']}; color: white; border: none; 
+                border-radius: 6px; font-weight: bold; font-size: 14px;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['danger_hover']}; }}
+        """)
+        self.btn_action.clicked.connect(self.handle_button)
+        
+        btn_container = QHBoxLayout()
+        btn_container.addStretch()
+        btn_container.addWidget(self.btn_action)
+        btn_container.addStretch()
+        content_layout.addLayout(btn_container)
+
+        main_layout.addWidget(content_widget)
+
+        # --- START VLÁKNA ---
+        self.worker = InstallationWorker(install_list)
+        self.worker.log_signal.connect(self.append_log)
+        self.worker.status_signal.connect(self.update_status)
+        self.worker.progress_signal.connect(self.progress.setValue)
+        self.worker.finished_signal.connect(self.on_finished)
+        self.worker.start()
+
+    # --- LOGIKA ---
+
+    def append_log(self, text):
+        self.txt_log.moveCursor(QTextCursor.MoveOperation.End)
+        self.txt_log.insertPlainText(text)
+        self.txt_log.moveCursor(QTextCursor.MoveOperation.End)
+
+    def update_status(self, text):
+        self.lbl_status.setText(text)
+
+    def on_finished(self, failed_apps):
+        if not failed_apps:
+            self.lbl_status.setText("✅ HOTOVO! Vše nainstalováno.")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 16px; font-weight: bold;")
         else:
-            self.title_label.config(text="HOTOVO (s chybami)", fg="orange")
-            self.failed_apps_str = ", ".join(self.failed_apps)
-            self.status_label.config(text=f"Nepodařilo se nainstalovat: {self.failed_apps_str}", fg=COLORS['danger'])
+            self.lbl_status.setText(f"⚠️ Hotovo s chybami ({len(failed_apps)})")
+            self.lbl_status.setStyleSheet("color: orange; font-size: 16px; font-weight: bold;")
+            self.append_log(f"\nNepodařilo se nainstalovat: {', '.join(failed_apps)}")
+
+        self.btn_action.setText("Zavřít")
+        self.btn_action.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['success']}; color: white; border: none; 
+                border-radius: 6px; font-weight: bold; font-size: 14px;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['success_hover']}; }}
+        """)
+        self.worker = None # Cleanup
+
+    def handle_button(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.append_log("\n!!! UŽIVATEL PŘERUŠIL INSTALACI !!!")
+            self.worker.wait()
+            self.close()
+        else:
+            self.close()
+
+    # --- POSOUVÁNÍ OKNA ---
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.old_pos = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.old_pos:
+            delta = event.globalPosition().toPoint() - self.old_pos
+            self.move(self.pos() + delta)
+            self.old_pos = event.globalPosition().toPoint()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self.old_pos = None

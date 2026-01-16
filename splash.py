@@ -1,66 +1,120 @@
-import tkinter as tk
-from tkinter import ttk
 import random
-from config import COLORS, CURRENT_VERSION  # <--- ZMĚNA ZDE
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QProgressBar, QFrame, QApplication)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPalette
 
-class SplashScreen(tk.Toplevel):
-    def __init__(self, parent, on_complete=None):
-        super().__init__(parent)
-        self.on_complete = on_complete 
+from config import COLORS, CURRENT_VERSION
+
+class SplashScreen(QWidget):
+    # Signál, který pošleme do main.py, až se načítání dokončí
+    finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        # Nastavení okna: Bez rámečku, Vždy navrchu, Průhledné pozadí (pro zakulacené rohy)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.SplashScreen)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.title("Načítání...")
-        w, h = 450, 280
-        ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
-        x, y = (ws/2) - (w/2), (hs/2) - (h/2)
-        self.geometry('%dx%d+%d+%d' % (w, h, x, y))
-        self.overrideredirect(True) 
-        self.configure(bg=COLORS['bg_main'])
+        # Hlavní layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10) # Okraj pro stín (pokud bys chtěl)
         
-        main_frame = tk.Frame(self, bg=COLORS['bg_main'], highlightbackground=COLORS['accent'], highlightthickness=2)
-        main_frame.pack(fill='both', expand=True)
-
-        tk.Label(main_frame, text="AI Winget Installer", font=("Segoe UI", 22, "bold"), bg=COLORS['bg_main'], fg=COLORS['fg']).pack(pady=(50, 5))
-        # Zde se používá proměnná z config.py
-        tk.Label(main_frame, text=f"Alpha version {CURRENT_VERSION}", font=("Segoe UI", 10), bg=COLORS['bg_main'], fg=COLORS['accent']).pack(pady=(0, 40))
-
-        self.loading_label = tk.Label(main_frame, text="Inicializace...", font=("Segoe UI", 9), bg=COLORS['bg_main'], fg=COLORS['sub_text'])
-        self.loading_label.pack(pady=(0, 5))
-
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure("Splash.Horizontal.TProgressbar", background=COLORS['accent'], troughcolor=COLORS['bg_sidebar'], borderwidth=0, thickness=6)
+        # Kontejner (Vzhled okna)
+        self.container = QFrame()
+        self.container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_main']};
+                border: 2px solid {COLORS['accent']};
+                border-radius: 12px;
+            }}
+        """)
         
-        self.progress = ttk.Progressbar(main_frame, orient="horizontal", length=350, mode="determinate", style="Splash.Horizontal.TProgressbar")
-        self.progress.pack()
-
+        # Stín (volitelné, v PyQt složitější, zde řešíme borderem)
+        
+        inner_layout = QVBoxLayout(self.container)
+        inner_layout.setContentsMargins(40, 50, 40, 40)
+        
+        # 1. Název Aplikace
+        lbl_title = QLabel("AI Winget Installer")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_title.setStyleSheet(f"color: {COLORS['fg']}; font-size: 26px; font-weight: bold; border: none; font-family: 'Segoe UI';")
+        inner_layout.addWidget(lbl_title)
+        
+        # 2. Verze
+        lbl_ver = QLabel(f"Alpha version {CURRENT_VERSION}")
+        lbl_ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_ver.setStyleSheet(f"color: {COLORS['accent']}; font-size: 13px; border: none; margin-bottom: 30px; font-family: 'Segoe UI';")
+        inner_layout.addWidget(lbl_ver)
+        
+        # 3. Status Text (Načítání...)
+        self.lbl_status = QLabel("Inicializace...")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 11px; border: none; font-family: 'Segoe UI';")
+        inner_layout.addWidget(self.lbl_status)
+        
+        # 4. Progress Bar
+        self.progress = QProgressBar()
+        self.progress.setFixedHeight(6)
+        self.progress.setTextVisible(False)
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: {COLORS['bg_sidebar']};
+                border-radius: 3px;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background-color: {COLORS['accent']};
+                border-radius: 3px;
+            }}
+        """)
+        inner_layout.addWidget(self.progress)
+        
+        layout.addWidget(self.container)
+        
+        # Nastavení velikosti a pozice
+        self.resize(480, 300)
+        self.center_on_screen()
+        
+        # Logika animace
         self.progress_val = 0
-        self.loading_steps = ["Načítání konfigurace...", "Připojování k AI...", "Kontrola Winget...", "GUI...", "Hotovo!"]
+        self.loading_steps = ["Načítání konfigurace...", "Připojování k AI...", "Kontrola Winget...", "Načítání GUI...", "Hotovo!"]
         self.step_index = 0
-        self.after(100, self.animate)
+        
+        # Časovač pro animaci (náhrada za self.after z Tkinteru)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.animate)
+        self.timer.start(30) # Každých 30ms
+
+    def center_on_screen(self):
+        screen = QApplication.primaryScreen().geometry()
+        size = self.geometry()
+        self.move(
+            int((screen.width() - size.width()) / 2),
+            int((screen.height() - size.height()) / 2)
+        )
 
     def animate(self):
         if self.progress_val < 100:
             increment = random.randint(1, 4)
             self.progress_val += increment
-            self.progress['value'] = self.progress_val
+            self.progress.setValue(self.progress_val)
+            
+            # Změna textu podle procent
             if self.progress_val > 20 and self.step_index == 0:
                 self.step_index = 1
-                self.loading_label.config(text=self.loading_steps[1])
+                self.lbl_status.setText(self.loading_steps[1])
             elif self.progress_val > 50 and self.step_index == 1:
                 self.step_index = 2
-                self.loading_label.config(text=self.loading_steps[2])
+                self.lbl_status.setText(self.loading_steps[2])
             elif self.progress_val > 80 and self.step_index == 2:
                 self.step_index = 3
-                self.loading_label.config(text=self.loading_steps[3])
-
-            self.after(30, self.animate)
+                self.lbl_status.setText(self.loading_steps[3])
         else:
-            self.loading_label.config(text=self.loading_steps[4])
-            self.after(500, self.close_splash)
+            self.lbl_status.setText(self.loading_steps[4])
+            self.timer.stop()
+            # Počkáme chvilku na 100% a pak zavřeme
+            QTimer.singleShot(500, self.finish_loading)
 
-    def close_splash(self):
-        self.destroy()
-        if self.on_complete:
-            self.on_complete()
-        else:
-            self.master.deiconify()
+    def finish_loading(self):
+        self.close()
+        self.finished.emit() # Vyšleme signál do main.py
