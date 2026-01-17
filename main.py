@@ -5,7 +5,7 @@ from ctypes import windll, byref, c_int
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QListWidget, QListWidgetItem, QStackedWidget, QMessageBox, QLabel, 
                              QPushButton, QDialog, QTextEdit, QFrame)
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QIcon, QFont, QMouseEvent
 
 import styles
@@ -18,6 +18,9 @@ from view_settings import SettingsPage
 from view_health import HealthCheckPage
 from view_updater import UpdaterPage
 from splash import SplashScreen
+
+# NOVÝ IMPORT PRO LOGIKU AKTUALIZACÍ
+from updater import AppUpdater
 
 def resource_path(relative_path):
     """ Získá absolutní cestu k souboru (funguje pro dev i pro PyInstaller exe) """
@@ -64,7 +67,7 @@ class HelpDialog(QDialog):
         """)
         
         title_layout = QHBoxLayout(title_bar)
-        title_layout.setContentsMargins(15, 0, 0, 0) # Nulový pravý margin, aby tlačítko šlo až do rohu
+        title_layout.setContentsMargins(15, 0, 0, 0) 
         
         lbl_title = QLabel("📖  Průvodce aplikací")
         lbl_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px; border: none; background: transparent;")
@@ -72,9 +75,9 @@ class HelpDialog(QDialog):
         
         title_layout.addStretch()
         
-        # Tlačítko zavřít (X) - Nativní Windows Styl
-        btn_close_x = QPushButton("\uE8BB") # Symbol křížku v Segoe MDL2
-        btn_close_x.setFixedSize(46, 44) # Širší a vysoké téměř jako lišta
+        # Tlačítko zavřít (X)
+        btn_close_x = QPushButton("\uE8BB") 
+        btn_close_x.setFixedSize(46, 44) 
         btn_close_x.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close_x.clicked.connect(self.reject)
         
@@ -83,12 +86,12 @@ class HelpDialog(QDialog):
                 background-color: transparent;
                 color: #cccccc;
                 border: none;
-                border-top-right-radius: 7px; /* Kopíruje radius okna */
-                font-family: 'Segoe MDL2 Assets'; /* Windows Systémový font ikon */
+                border-top-right-radius: 7px;
+                font-family: 'Segoe MDL2 Assets';
                 font-size: 10px;
             }
             QPushButton:hover {
-                background-color: #e81123;   /* Červená při najetí */
+                background-color: #e81123;
                 color: white;
             }
             QPushButton:pressed {
@@ -210,6 +213,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Chyba stylů: {e}")
 
+        # === 1. INICIALIZACE UPDATERU ===
+        self.updater = AppUpdater(self)
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
@@ -279,9 +285,14 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(HealthCheckPage())        
         try: self.pages.addWidget(UninstallerPage())    
         except Exception as e: self.pages.addWidget(QLabel(f"Chyba: {e}"))
-        self.pages.addWidget(SettingsPage())           
+        
+        # === 2. PŘEDÁNÍ UPDATERU DO NASTAVENÍ ===
+        self.pages.addWidget(SettingsPage(updater=self.updater))           
 
         self.sidebar_list.setCurrentRow(0)
+        
+        # === 3. AUTOMATICKÁ KONTROLA PO STARTU (s odkladem 2s) ===
+        QTimer.singleShot(2000, lambda: self.updater.check_for_updates(silent=True))
 
     def add_sidebar_item(self, text):
         item = QListWidgetItem(text)

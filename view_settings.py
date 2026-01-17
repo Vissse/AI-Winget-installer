@@ -283,8 +283,9 @@ class SettingRow(QWidget):
 # --- HLAVNÍ STRÁNKA NASTAVENÍ ---
 
 class SettingsPage(QWidget):
-    def __init__(self):
+    def __init__(self, updater=None):  # <--- ZMĚNA: Přidán parametr updater
         super().__init__()
+        self.updater = updater         # <--- ZMĚNA: Uložení reference
         self.settings = SettingsManager.load_settings()
         
         main_layout = QVBoxLayout(self)
@@ -472,16 +473,27 @@ class SettingsPage(QWidget):
         self.content_layout.addWidget(SettingRow("Jazyk aplikace", "Změna se projeví po restartu.", self.lang_combo))
         self.content_layout.addWidget(Separator())
 
-        # 5. SEKCE: SYSTÉM
+       # 5. SEKCE: SYSTÉM
         self.content_layout.addWidget(SectionHeader("Systém"))
         btn_update = QPushButton("Zkontrolovat aktualizace")
         self._style_link_btn(btn_update)
-        btn_update.clicked.connect(lambda: QMessageBox.information(self, "Update", "Máte nejnovější verzi."))
+        
+        # --- OPRAVA: Původní řádek s "Máte nejnovější verzi" musí zmizet ---
+        
+        if self.updater:
+            # Pokud máme updater, připojíme ho (tlačítko zavolá logiku stahování)
+            btn_update.clicked.connect(lambda: self.updater.check_for_updates(silent=False))
+        else:
+            # Pokud updater není (např. chyba inicializace), vypneme tlačítko
+            btn_update.clicked.connect(lambda: QMessageBox.warning(self, "Chyba", "Modul aktualizací není dostupný."))
+            btn_update.setEnabled(False)
+            
         self.content_layout.addWidget(SettingRow("Aktualizace", "Zkontrolujte dostupnost nové verze.", btn_update))
 
         self.content_layout.addStretch()
         self.scroll_area.setWidget(self.content_widget)
         main_layout.addWidget(self.scroll_area)
+        
 
 
     # --- STYLY A LOGIKA ---

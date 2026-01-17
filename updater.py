@@ -1,139 +1,182 @@
-# updater.py
-import requests
-import os
 import sys
+import os
+import requests
 import subprocess
-import tkinter as tk
-from tkinter import messagebox, ttk
-from packaging import version
-import threading
 import tempfile
 import random
 from pathlib import Path
+from packaging import version
 
-# NOVÝ IMPORT Z CONFIGU
-from config import CURRENT_VERSION 
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar, QMessageBox, QPushButton
 
-# --- KONFIGURACE GITHUB ---
+# Předpokládám existenci těchto proměnných v configu
+from config import CURRENT_VERSION, COLORS
+
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
-class UpdateProgressDialog(tk.Toplevel):
-    def __init__(self, parent, total_size, download_url, on_success, on_fail):
-        super().__init__(parent)
-        self.title("Aktualizace aplikace")
-        self.geometry("400x150")
-        self.resizable(False, False)
-        try:
-            ws, hs = self.winfo_screenwidth(), self.winfo_screenheight()
-            x, y = (ws/2) - (200), (hs/2) - (75)
-            self.geometry(f"400x150+{int(x)}+{int(y)}")
-        except: pass
-        self.configure(bg="#1e1e1e")
-        self.grab_set()
-        
-        self.lbl_info = tk.Label(self, text="Stahuji aktualizaci...", font=("Segoe UI", 12, "bold"), bg="#1e1e1e", fg="white")
-        self.lbl_info.pack(pady=(20, 10))
-        
-        self.progress_var = tk.DoubleVar()
-        self.progress = ttk.Progressbar(self, variable=self.progress_var, maximum=100)
-        self.progress.pack(fill="x", padx=40, pady=10)
-        
-        self.status_lbl = tk.Label(self, text="0%", font=("Segoe UI", 10), bg="#1e1e1e", fg="#aaaaaa")
-        self.status_lbl.pack()
-        
-        self.download_url = download_url
-        self.total_size = total_size
-        self.on_success = on_success
-        self.on_fail = on_fail
-        self.is_downloading = True
-        
-        self.temp_dir = tempfile.gettempdir()
-        self.target_temp_file = os.path.join(self.temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
-        
-        threading.Thread(target=self.download_thread, daemon=True).start()
+class DownloadWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str) # Path to file
+    error = pyqtSignal(str)
 
-    def download_thread(self):
+    def __init__(self, url, total_size):
+        super().__init__()
+        self.url = url
+        self.total_size = total_size
+        self.is_running = True
+
+    def run(self):
         try:
-            if os.path.exists(self.target_temp_file):
-                try: os.remove(self.target_temp_file)
-                except: pass
+            temp_dir = tempfile.gettempdir()
+            target_path = os.path.join(temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
             
-            response = requests.get(self.download_url, stream=True)
+            response = requests.get(self.url, stream=True)
             downloaded = 0
-            with open(self.target_temp_file, "wb") as f:
+            
+            with open(target_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
-                    if not self.is_downloading: break
+                    if not self.is_running: break
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if self.total_size > 0:
-                            percent = (downloaded / self.total_size) * 100
-                            self.after(0, lambda p=percent: self.update_ui(p))
+                            percent = int((downloaded / self.total_size) * 100)
+                            self.progress.emit(percent)
             
-            if self.total_size > 0 and downloaded < self.total_size: 
-                raise Exception("Stažený soubor je nekompletní.")
-                
-            self.after(0, lambda: self.on_success(self.target_temp_file))
-            self.after(0, self.destroy)
-            
+            if self.is_running:
+                self.finished.emit(target_path)
         except Exception as e:
-            if os.path.exists(self.target_temp_file): 
-                try: os.remove(self.target_temp_file)
-                except: pass
-            self.after(0, lambda: messagebox.showerror("Chyba", f"Stahování selhalo:\n{e}"))
-            self.after(0, self.on_fail)
-            self.after(0, self.destroy)
+            self.error.emit(str(e))
 
-    def update_ui(self, percent):
-        self.progress_var.set(percent)
-        self.status_lbl.config(text=f"{int(percent)} %")
+    def stop(self):
+        self.is_running = False
 
-class GitHubUpdater:
-    def __init__(self, parent_window=None):
-        self.parent = parent_window
-        self.api_url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest"
+class UpdateDialog(QDialog):
+    def __init__(self, parent, download_url, size, on_success):
+        super().__init__(parent)
+        self.setWindowTitle("Aktualizace aplikace")
+        self.setFixedSize(400, 150)
+        self.setStyleSheet(f"background-color: {COLORS.get('bg_main', '#1e1e1e')}; color: white;")
+        
+        layout = QVBoxLayout(self)
+        
+        self.lbl_status = QLabel("Stahuji aktualizaci...")
+        self.lbl_status.setStyleSheet("font-size: 14px; font-weight: bold;")
+        layout.addWidget(self.lbl_status)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{ border: 1px solid #444; border-radius: 5px; text-align: center; }}
+            QProgressBar::chunk {{ background-color: {COLORS.get('accent', '#0078d4')}; }}
+        """)
+        layout.addWidget(self.progress_bar)
+        
+        self.btn_cancel = QPushButton("Zrušit")
+        self.btn_cancel.clicked.connect(self.cancel_download)
+        self.btn_cancel.setStyleSheet("background-color: #d32f2f; color: white; border: none; padding: 5px; border-radius: 4px;")
+        layout.addWidget(self.btn_cancel)
 
-    def check_for_updates(self, silent=False, on_continue=None):
+        self.on_success = on_success
+        self.worker = DownloadWorker(download_url, size)
+        self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.finished.connect(self.on_download_finished)
+        self.worker.error.connect(self.on_download_error)
+        self.worker.start()
+
+    def on_download_finished(self, path):
+        self.accept()
+        self.on_success(path)
+
+    def on_download_error(self, err_msg):
+        QMessageBox.critical(self, "Chyba", f"Stahování selhalo:\n{err_msg}")
+        self.reject()
+
+    def cancel_download(self):
+        if self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait()
+        self.reject()
+
+class UpdateCheckerWorker(QThread):
+    result = pyqtSignal(dict) # {status: 'ok'/'error', data: ...}
+
+    def run(self):
+        api_url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest"
         try:
-            response = requests.get(self.api_url, timeout=5)
+            response = requests.get(api_url, timeout=5)
             if response.status_code == 200:
-                data = response.json()
-                latest_tag = data.get("tag_name", "0.0.0").lstrip("v")
-                if version.parse(latest_tag) > version.parse(CURRENT_VERSION):
-                    asset_url, size = self._get_exe_info(data)
-                    if asset_url:
-                        self.parent.after(0, lambda: self._prompt_update(latest_tag, asset_url, size, on_continue))
-                        return
-                    else:
-                        if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", "Release nemá .exe soubor."))
-                else:
-                    if not silent: self.parent.after(0, lambda: messagebox.showinfo("Aktuální", "Máte nejnovější verzi."))
+                self.result.emit({'status': 'ok', 'data': response.json()})
             else:
-                if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", f"GitHub API: {response.status_code}"))
+                self.result.emit({'status': 'error', 'msg': f"API Error: {response.status_code}"})
         except Exception as e:
-            if not silent: self.parent.after(0, lambda: messagebox.showerror("Chyba", f"{e}"))
-        if on_continue: self.parent.after(0, on_continue)
+            self.result.emit({'status': 'error', 'msg': str(e)})
+
+class AppUpdater(QObject):
+    def __init__(self, parent_window):
+        super().__init__()
+        self.parent = parent_window
+        self.checker_worker = None
+
+    def check_for_updates(self, silent=True):
+        """
+        silent=True: Nevyskakuje okno, pokud není update (pro start aplikace).
+        silent=False: Vyskočí okno 'Máte nejnovější verzi' (pro tlačítko v nastavení).
+        """
+        self.silent_mode = silent
+        self.checker_worker = UpdateCheckerWorker()
+        self.checker_worker.result.connect(self.handle_check_result)
+        self.checker_worker.start()
+
+    def handle_check_result(self, result):
+        if result['status'] == 'error':
+            if not self.silent_mode:
+                QMessageBox.warning(self.parent, "Chyba aktualizace", f"Nelze ověřit aktualizace:\n{result['msg']}")
+            return
+
+        data = result['data']
+        latest_tag = data.get("tag_name", "0.0.0").lstrip("v")
+        
+        try:
+            if version.parse(latest_tag) > version.parse(CURRENT_VERSION):
+                asset_url, size = self._get_exe_info(data)
+                if asset_url:
+                    self._prompt_update(latest_tag, asset_url, size)
+                elif not self.silent_mode:
+                    QMessageBox.warning(self.parent, "Chyba", "Nová verze existuje, ale chybí .exe soubor.")
+            else:
+                if not self.silent_mode:
+                    QMessageBox.information(self.parent, "Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
+        except Exception as e:
+            print(f"Update parse error: {e}")
 
     def _get_exe_info(self, release_data):
         for asset in release_data.get("assets", []):
-            if asset["name"].endswith(".exe") and "Setup" not in asset["name"]: return asset["browser_download_url"], asset.get("size", 0)
-            elif asset["name"].endswith(".exe"): return asset["browser_download_url"], asset.get("size", 0)
+            name = asset["name"].lower()
+            if name.endswith(".exe"):
+                return asset["browser_download_url"], asset.get("size", 0)
         return None, 0
 
-    def _prompt_update(self, new_version, url, size, on_continue):
-        msg = f"Je dostupná nová verze {new_version}!\n\nStáhnout a nainstalovat?\n(Aplikace se restartuje)"
-        if messagebox.askyesno("Aktualizace", msg, parent=self.parent):
-            UpdateProgressDialog(self.parent, size, url, self._perform_restart, on_continue)
-        else:
-            if on_continue: on_continue()
+    def _prompt_update(self, new_version, url, size):
+        reply = QMessageBox.question(
+            self.parent, 
+            "Nová aktualizace", 
+            f"Je dostupná nová verze {new_version}!\n\nChcete ji stáhnout a nainstalovat?\nAplikace se restartuje.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            dialog = UpdateDialog(self.parent, url, size, self._perform_restart)
+            dialog.exec()
 
     def _perform_restart(self, downloaded_file_path):
         try:
             current_exe_path = Path(sys.executable).resolve()
             
-            if not current_exe_path.name.lower().endswith(".exe"): 
-                messagebox.showinfo("Dev Mode", f"Staženo do:\n{downloaded_file_path}\n(V Pythonu nelze přepsat běžící skript)")
+            # Detekce dev prostředí
+            if not str(current_exe_path).lower().endswith(".exe") or "python" in str(current_exe_path).lower():
+                QMessageBox.information(self.parent, "Dev Mode", f"Staženo do:\n{downloaded_file_path}\n(V Pythonu nelze přepsat běžící skript)")
                 return
 
             temp_dir = tempfile.gettempdir()
@@ -141,11 +184,7 @@ class GitHubUpdater:
             
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
-            clean_env.pop('_MEIPASS', None)
             
-            # --- Tady je změna: Používáme EXPLORER.EXE ---
-            # Explorer ignoruje environmentální proměnné rodiče,
-            # takže aplikace nastartuje naprosto čistě.
             bat_content = f"""
 @echo off
 chcp 65001 > nul
@@ -161,7 +200,7 @@ if exist "{str(current_exe_path)}" (
 
 move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
-echo Spoustim pres Explorer (Breakaway)...
+echo Restartuji aplikaci...
 explorer.exe "{str(current_exe_path)}"
 
 (goto) 2>nul & del "%~f0"
@@ -171,12 +210,9 @@ explorer.exe "{str(current_exe_path)}"
 
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            # Spouštíme batch file
             subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
             
-            self.parent.quit()
             sys.exit()
 
         except Exception as e:
-            messagebox.showerror("Chyba", f"Instalace selhala:\n{e}")
+            QMessageBox.critical(self.parent, "Chyba", f"Instalace selhala:\n{e}")
