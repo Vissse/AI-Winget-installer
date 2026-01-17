@@ -3,66 +3,67 @@ import sys
 import os
 import shutil
 import tempfile
-import random
-import ctypes
 import glob
 from pathlib import Path
+import ctypes
+
+# Název souboru instalátoru, který budeme hledat v Downloads a mazat
+INSTALLER_FILENAME = "WingetInstaller_Setup_Update.exe"
+
+def cleanup_installer():
+    """
+    Smaže stažený instalátor ze složky Downloads, pokud tam zbyl z minula.
+    """
+    try:
+        downloads_path = str(Path.home() / "Downloads")
+        installer_path = os.path.join(downloads_path, INSTALLER_FILENAME)
+        
+        if os.path.exists(installer_path):
+            try:
+                os.remove(installer_path)
+            except Exception:
+                pass # Pokud je soubor zamčený, necháme ho být
+    except Exception:
+        pass
 
 def cleanup_old_mei_folders():
     """
-    Pokusí se smazat staré _MEI složky v Tempu, které tam zůstaly po předchozích updatech.
-    Maže jen ty, které nejsou aktuálně používané (nejsou zamčené).
+    Pokusí se smazat staré _MEI složky v Tempu (pozůstatky z doby, kdy byla appka OneFile).
+    Tohle tu necháme, aby se uživatelům vyčistil disk po starých verzích.
     """
     try:
         temp_dir = tempfile.gettempdir()
         base_mei = os.path.join(temp_dir, "_MEI*")
         
-        # Zjistíme naši aktuální složku (pokud běžíme v exe), abychom nesmazali sami sebe
-        current_mei = None
-        if hasattr(sys, '_MEIPASS'):
-            current_mei = sys._MEIPASS
-
         for mei_folder in glob.glob(base_mei):
-            # Pokud je to naše aktuální složka, ignorujeme ji
-            if current_mei and os.path.abspath(mei_folder) == os.path.abspath(current_mei):
-                continue
-
-            # Pokusíme se složku smazat
             try:
+                # V onedir režimu nic neběží z MEI, takže můžeme mazat všechno
                 shutil.rmtree(mei_folder, ignore_errors=True)
             except Exception:
-                # Pokud to nejde smazat (někdo ji používá), nevadí, necháme ji být
                 pass
     except Exception:
         pass
 
-
 def perform_boot_checks():
     """
-    Spustí kritické kontroly prostředí.
+    Spustí úklid při startu.
     """
-    # 1. Úklid starého nepořádku
+    # 1. Smazání instalačního souboru z Downloads
+    cleanup_installer()
+    
+    # 2. Úklid starých temp složek (údržba)
     cleanup_old_mei_folders()
 
-    if "_MEIPASS2" in os.environ:
-        del os.environ["_MEIPASS2"]
-
-    # 2. SAFE BOOT (Záloha prostředí - volitelné, pro jistotu)
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        try:
-            current_mei = Path(sys._MEIPASS)
-            safe_mei_path = Path(tempfile.gettempdir()) / f"AIWinget_Safe_MEI_{random.randint(1000, 99999)}"
-            
-            if not safe_mei_path.exists():
-                shutil.copytree(current_mei, safe_mei_path, dirs_exist_ok=True)
-                
-            os.environ["PATH"] += os.pathsep + str(safe_mei_path)
-        except Exception:
-            pass
-
 def resource_path(relative_path):
+    """
+    Získá cestu k souboru (kompatibilní s --onedir).
+    """
     try:
-        base_path = sys._MEIPASS
+        if getattr(sys, 'frozen', False):
+            # V onedir je base_path složka, kde leží .exe
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.abspath(".")
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)

@@ -20,13 +20,20 @@ from view_updater import UpdaterPage
 from splash import SplashScreen
 import boot_system
 
-# NOVÝ IMPORT PRO LOGIKU AKTUALIZACÍ
+# Import updateru
 from updater import AppUpdater
 
 def resource_path(relative_path):
-    """ Získá absolutní cestu k souboru (funguje pro dev i pro PyInstaller exe) """
+    """ 
+    Získá absolutní cestu k souboru.
+    Upraveno pro --onedir: Hledá soubory vedle .exe souboru.
+    """
     try:
-        base_path = sys._MEIPASS
+        # Pokud běžíme jako zkompilované EXE
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.abspath(".")
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
@@ -35,7 +42,7 @@ def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
 
-# --- OKNO S NÁPOVĚDOU (MODERNÍ DESIGN) ---
+# --- OKNO S NÁPOVĚDOU ---
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,7 +50,6 @@ class HelpDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(600, 520)
         
-        # Hlavní kontejner
         self.container = QWidget(self)
         self.container.setGeometry(0, 0, 600, 520)
         self.container.setStyleSheet("background: transparent; border: none;")
@@ -52,7 +58,7 @@ class HelpDialog(QDialog):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. HORNÍ LIŠTA
+        # HORNÍ LIŠTA
         title_bar = QWidget()
         title_bar.setFixedHeight(45)
         title_bar.setStyleSheet(f"""
@@ -73,38 +79,24 @@ class HelpDialog(QDialog):
         lbl_title = QLabel("📖  Průvodce aplikací")
         lbl_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px; border: none; background: transparent;")
         title_layout.addWidget(lbl_title)
-        
         title_layout.addStretch()
         
-        # Tlačítko zavřít (X)
         btn_close_x = QPushButton("\uE8BB") 
         btn_close_x.setFixedSize(46, 44) 
         btn_close_x.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close_x.clicked.connect(self.reject)
-        
         btn_close_x.setStyleSheet("""
             QPushButton {
-                background-color: transparent;
-                color: #cccccc;
-                border: none;
-                border-top-right-radius: 7px;
-                font-family: 'Segoe MDL2 Assets';
-                font-size: 10px;
+                background-color: transparent; color: #cccccc; border: none;
+                border-top-right-radius: 7px; font-family: 'Segoe MDL2 Assets'; font-size: 10px;
             }
-            QPushButton:hover {
-                background-color: #e81123;
-                color: white;
-            }
-            QPushButton:pressed {
-                background-color: #b00b1a;
-                color: white;
-            }
+            QPushButton:hover { background-color: #e81123; color: white; }
+            QPushButton:pressed { background-color: #b00b1a; color: white; }
         """)
         title_layout.addWidget(btn_close_x)
-        
         main_layout.addWidget(title_bar)
 
-        # 2. OBSAH OKNA
+        # OBSAH
         content_widget = QWidget()
         content_widget.setStyleSheet(f"""
             QWidget {{
@@ -112,11 +104,8 @@ class HelpDialog(QDialog):
                 border-left: 1px solid {COLORS['border']};
                 border-right: 1px solid {COLORS['border']};
                 border-bottom: 1px solid {COLORS['border']};
-                border-top: none;
                 border-bottom-left-radius: 8px;
                 border-bottom-right-radius: 8px;
-                border-top-left-radius: 0px;
-                border-top-right-radius: 0px;
             }}
         """)
         
@@ -127,39 +116,22 @@ class HelpDialog(QDialog):
         text_area.setReadOnly(True)
         text_area.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {COLORS['bg_sidebar']}; 
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                padding: 10px;
-                font-size: 14px;
-                color: #ddd;
+                background-color: {COLORS['bg_sidebar']}; border: 1px solid {COLORS['border']};
+                border-radius: 8px; padding: 10px; font-size: 14px; color: #ddd;
             }}
-            QScrollBar:vertical {{
-                border: none; background-color: {COLORS['bg_sidebar']}; width: 8px; margin: 0px; border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color: #444; min-height: 20px; border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{ background-color: {COLORS['accent']}; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
         """)
         
         html_content = f"""
         <h3 style="color: {COLORS['accent']}">📦 Chytrá instalace aplikací</h3>
-        <p>Umožňuje vyhledávat a hromadně instalovat aplikace pomocí AI a Winget. Můžete si vytvořit frontu a nainstalovat vše naraz.</p>
-        
+        <p>Umožňuje vyhledávat a hromadně instalovat aplikace pomocí AI a Winget.</p>
         <h3 style="color: {COLORS['accent']}">🔄 Aktualizace aplikací</h3>
-        <p>Zkontroluje všechny nainstalované programy v PC a nabídne hromadnou aktualizaci na nejnovější verze.</p>
-        
+        <p>Zkontroluje programy v PC a nabídne hromadnou aktualizaci.</p>
         <h3 style="color: {COLORS['accent']}">🩺 Kontrola stavu PC</h3>
-        <p>Analyzuje zdraví systému (disk, baterie, RAM) a navrhne optimalizace (SFC scan, DISM).</p>
-        
+        <p>Analyzuje zdraví systému (disk, baterie, RAM) a navrhne optimalizace.</p>
         <h3 style="color: {COLORS['accent']}">🗑️ Odinstalace aplikací</h3>
-        <p>Čisté odstranění programů včetně zbytků, které běžný odinstalátor často nechává.</p>
-        
+        <p>Čisté odstranění programů včetně zbytků.</p>
         <hr>
-        <p><i>Tip: V Nastavení si můžete upravit chování instalátoru (tichý režim, instalace pro všechny uživatele).</i></p>
+        <p><i>Tip: V Nastavení si můžete upravit chování instalátoru.</i></p>
         """
         text_area.setHtml(html_content)
         content_layout.addWidget(text_area)
@@ -176,7 +148,6 @@ class HelpDialog(QDialog):
         """)
         btn_ok.clicked.connect(self.accept)
         content_layout.addWidget(btn_ok)
-
         main_layout.addWidget(content_widget)
         
         self.old_pos = None
@@ -205,7 +176,8 @@ class MainWindow(QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         else:
-            self.setWindowIcon(QIcon.fromTheme("system-software-install"))
+            # Fallback ikona
+            pass
         
         self.apply_custom_title_bar()
 
@@ -214,7 +186,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Chyba stylů: {e}")
 
-        # === 1. INICIALIZACE UPDATERU ===
         self.updater = AppUpdater(self)
 
         central_widget = QWidget()
@@ -227,7 +198,6 @@ class MainWindow(QMainWindow):
         sidebar_container = QWidget()
         sidebar_container.setFixedWidth(260)
         sidebar_container.setStyleSheet(f"background-color: {COLORS['bg_sidebar']}; border-right: 1px solid {COLORS['border']};")
-        
         sidebar_layout = QVBoxLayout(sidebar_container)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
@@ -268,7 +238,6 @@ class MainWindow(QMainWindow):
         self.btn_help = QPushButton("❓")
         self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_help.setFixedSize(40, 40)
-        self.btn_help.setToolTip("Vysvětlivka funkcí")
         self.btn_help.clicked.connect(self.show_help)
         self._style_bottom_btn(self.btn_help)
 
@@ -280,17 +249,14 @@ class MainWindow(QMainWindow):
         # PRAVÝ OBSAH
         self.pages = QStackedWidget()
         main_layout.addWidget(self.pages)
-
         self.pages.addWidget(InstallerPage())          
         self.pages.addWidget(UpdaterPage())            
         self.pages.addWidget(HealthCheckPage())        
         try: self.pages.addWidget(UninstallerPage())    
-        except Exception as e: self.pages.addWidget(QLabel(f"Chyba: {e}"))
-        
-        # === 2. PŘEDÁNÍ UPDATERU DO NASTAVENÍ ===
+        except Exception: self.pages.addWidget(QLabel("Chyba načítání odinstalátoru"))
         self.pages.addWidget(SettingsPage(updater=self.updater))           
-        self.sidebar_list.setCurrentRow(0)
         
+        self.sidebar_list.setCurrentRow(0)
 
     def add_sidebar_item(self, text):
         item = QListWidgetItem(text)
@@ -334,7 +300,7 @@ class MainWindow(QMainWindow):
         except: pass
 
 if __name__ == "__main__":
-    # 1. Boot Checks
+    # 1. Boot Checks (Úklid nepořádku po minulé verzi)
     try:
         import boot_system
         boot_system.perform_boot_checks()
@@ -342,11 +308,10 @@ if __name__ == "__main__":
 
     app = QApplication(sys.argv)
     
-    # === TOTO JE TA GLOBÁLNÍ OPRAVA ===
-    # Jakmile se aplikace rozhodne skončit, natvrdo ji zabijeme.
-    # Tím se PyInstaller nestihne pokusit smazat _MEI složku a nevyhodí chybu.
+    # === POJISTKA PROTI CHYBÁM PŘI VYPÍNÁNÍ ===
+    # V režimu --onedir to není tak kritické jako u --onefile,
+    # ale je to dobrá praxe pro čisté ukončení bez hlášek.
     app.aboutToQuit.connect(lambda: os._exit(0))
-    # ==================================
 
     splash = SplashScreen()
     splash.show()
@@ -354,13 +319,10 @@ if __name__ == "__main__":
     def start_program():
         global window
         window = MainWindow()
-        
         def launch_app_interface():
             window.show()
-
+        # Spustíme kontrolu aktualizací
         window.updater.check_for_updates(silent=True, on_continue=launch_app_interface)
 
     splash.finished.connect(start_program)
-    
-    # Zde už není potřeba sys.exit, protože app.exec() se ukončí přes aboutToQuit -> os._exit(0)
     app.exec()

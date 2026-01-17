@@ -2,7 +2,8 @@ import sys
 import os
 import requests
 import time
-import random
+import subprocess
+import tempfile
 from pathlib import Path
 from packaging import version
 
@@ -22,9 +23,11 @@ except ImportError:
 
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
+# Fixní název souboru, abychom ho mohli v boot_system.py najít a smazat
+INSTALLER_FILENAME = "WingetInstaller_Setup_Update.exe"
 
 # ============================================================================
-# 1. UI PRVKY (Toast, Dialogy) - Beze změny
+# 1. UI PRVKY (Toast, Dialogy) - Zůstávají beze změny
 # ============================================================================
 
 class StatusToast(QDialog):
@@ -166,16 +169,21 @@ class DownloadWorker(QThread):
         self.is_running = True
     def run(self):
         try:
-            # ZMĚNA: Ukládáme do složky Downloads místo do Temp
-            # To je bezpečnější a Windows to méně blokuje
+            # ZMĚNA: Ukládáme do Downloads (aby to sedělo s boot_system.py)
             downloads_path = str(Path.home() / "Downloads")
-            target_path = os.path.join(downloads_path, f"WingetInstaller_Setup_{random.randint(1000,9999)}.exe")
+            target_path = os.path.join(downloads_path, INSTALLER_FILENAME)
             
-            if os.path.exists(target_path): os.remove(target_path)
+            # Pokud existuje starý, smažeme ho
+            if os.path.exists(target_path): 
+                try: os.remove(target_path)
+                except: pass
             
             headers = {'User-Agent': 'WingetInstaller-App'}
             response = requests.get(self.url, headers=headers, stream=True, timeout=10)
             
+            if response.status_code != 200:
+                raise Exception(f"Chyba stahování: {response.status_code}")
+
             downloaded = 0
             with open(target_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -185,8 +193,16 @@ class DownloadWorker(QThread):
                         downloaded += len(chunk)
                         if self.total_size > 0:
                             self.progress.emit(int((downloaded / self.total_size) * 100))
-            if self.is_running: self.finished.emit(target_path)
-        except Exception as e: self.error.emit(str(e))
+            
+            if self.is_running: 
+                # Kontrola, zda soubor skutečně existuje
+                if os.path.exists(target_path):
+                    self.finished.emit(target_path)
+                else:
+                    self.error.emit("Soubor se po stažení nepodařilo najít.")
+
+        except Exception as e: 
+            self.error.emit(str(e))
     def stop(self): self.is_running = False
 
 class UpdateCheckerWorker(QThread):
@@ -252,23 +268,22 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí instalátor přes shell a počká chvíli, než zabije aplikaci.
+        Spustí instalátor a ukončí aplikaci.
         """
         try:
             if not os.path.exists(installer_path):
                 raise FileNotFoundError(f"Instalátor nebyl nalezen na: {installer_path}")
 
-            # 1. Spustíme soubor
-            os.startfile(installer_path)
+            # Použijeme subprocess s shell=True a 'start', což je na Windows nejspolehlivější
+            # pro vyvolání UAC a spuštění instalátoru mimo kontext Pythonu.
+            subprocess.Popen(f'start "" "{installer_path}"', shell=True)
             
-            # 2. DŮLEŽITÉ: Počkáme 2 sekundy.
-            # Dáváme Windows čas na to, aby spustil proces, zkontroloval ho antivirem a otevřel okno.
-            # Kdybychom aplikaci zabili hned, Windows by ten start zrušil.
-            time.sleep(2)
+            # Krátká pauza, aby se příkaz stihl provést
+            time.sleep(1)
             
-            # 3. TVRDÉ UKONČENÍ
+            # TVRDÉ UKONČENÍ - zabrání chybě s _MEI složkou
             os._exit(0)
             
         except Exception as e:
-            QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}\n\nSoubor je stažen ve složce Downloads.")
+            QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}")
             if self.on_continue: self.on_continue()

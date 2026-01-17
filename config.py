@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path
 
-CURRENT_VERSION = "7.4.3"
+CURRENT_VERSION = "7.4.4"
 
 try:
     _docs_dir = Path.home() / "Documents" / "AI_Winget_Installer"
