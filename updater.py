@@ -1,9 +1,9 @@
 import sys
 import os
 import requests
-import subprocess
-import tempfile
+import time
 import random
+from pathlib import Path
 from packaging import version
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer
@@ -24,33 +24,26 @@ GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
 # ============================================================================
-# 1. UI PRVKY
+# 1. UI PRVKY (Toast, Dialogy) - Beze změny
 # ============================================================================
 
 class StatusToast(QDialog):
-    """Bublina 'Máte nejnovější verzi', která sama zmizí."""
     def __init__(self, parent, title, message, duration=3000):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(300, 80)
-        
         self.container = QWidget(self)
         self.container.setGeometry(0, 0, 300, 80)
         self.container.setStyleSheet(f"background-color: #2d2d2d; border: 1px solid #454545; border-radius: 4px;")
-        
         layout = QVBoxLayout(self.container)
         layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(2)
-        
         lbl_title = QLabel(title)
         lbl_title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px; border: none;")
         layout.addWidget(lbl_title)
-        
         lbl_msg = QLabel(message)
         lbl_msg.setStyleSheet("color: #cccccc; font-size: 11px; border: none;")
         layout.addWidget(lbl_msg)
-        
         QTimer.singleShot(duration, self.close)
         self.center_on_parent(parent)
 
@@ -71,38 +64,29 @@ class StyledDialogBase(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(450, 220) 
         self.drag_pos = None
-
         self.window_layout = QVBoxLayout(self)
         self.window_layout.setContentsMargins(0, 0, 0, 0)
-        
         self.container = QWidget(self)
         self.container.setStyleSheet(f"background-color: {COLORS.get('bg_main', '#1e1e1e')}; border: 1px solid {COLORS.get('border', '#444')}; border-radius: 8px;")
         self.window_layout.addWidget(self.container)
-        
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Lišta
         title_bar = QWidget()
         title_bar.setFixedHeight(40)
         title_bar.setStyleSheet(f"background-color: {COLORS.get('bg_sidebar', '#252526')}; border-bottom: 1px solid #444; border-top-left-radius: 8px; border-top-right-radius: 8px;")
         t_layout = QHBoxLayout(title_bar)
         t_layout.setContentsMargins(15, 0, 10, 0)
-        
         lbl = QLabel(title)
         lbl.setStyleSheet("color: white; font-weight: bold; border: none; background: transparent;")
         t_layout.addWidget(lbl)
         t_layout.addStretch()
-        
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.reject)
         close_btn.setStyleSheet("QPushButton { background: transparent; color: #aaa; border: none; } QPushButton:hover { color: white; background: #c42b1c; border-radius: 4px; }")
         t_layout.addWidget(close_btn)
-        
         self.container_layout.addWidget(title_bar)
-        
         self.content_widget = QWidget()
         self.content_widget.setStyleSheet("background: transparent; border: none;")
         self.content_layout = QVBoxLayout(self.content_widget)
@@ -113,7 +97,6 @@ class StyledDialogBase(QDialog):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
-
     def mouseMoveEvent(self, event: QMouseEvent):
         if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos:
             self.move(event.globalPosition().toPoint() - self.drag_pos)
@@ -127,18 +110,15 @@ class UpdatePromptDialog(StyledDialogBase):
         lbl.setStyleSheet("color: #ddd; font-size: 14px; border: none;")
         self.content_layout.addWidget(lbl)
         self.content_layout.addStretch()
-        
         btns = QHBoxLayout()
         btn_no = QPushButton("Později")
         btn_no.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_no.clicked.connect(self.reject)
         btn_no.setStyleSheet("QPushButton { background: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px; padding: 6px 15px; } QPushButton:hover { background: #333; }")
-        
         btn_yes = QPushButton("Aktualizovat")
         btn_yes.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_yes.clicked.connect(self.accept)
         btn_yes.setStyleSheet(f"QPushButton {{ background: {COLORS.get('accent', '#0078d4')}; color: white; border: none; border-radius: 4px; padding: 6px 15px; font-weight: bold; }} QPushButton:hover {{ background: #3292e0; }}")
-        
         btns.addWidget(btn_no)
         btns.addWidget(btn_yes)
         self.content_layout.addLayout(btns)
@@ -148,31 +128,25 @@ class UpdateDownloadDialog(StyledDialogBase):
         super().__init__(parent, title="Stahování")
         self.setFixedSize(400, 180)
         self.on_success = on_success
-        
         self.lbl_status = QLabel("Stahuji instalátor...")
         self.lbl_status.setStyleSheet("color: white; border: none;")
         self.content_layout.addWidget(self.lbl_status)
-        
         self.pbar = QProgressBar()
         self.pbar.setStyleSheet(f"QProgressBar {{ border: 1px solid #444; background: #111; height: 10px; border-radius: 5px; }} QProgressBar::chunk {{ background: {COLORS.get('accent', '#0078d4')}; border-radius: 4px; }}")
         self.content_layout.addWidget(self.pbar)
-        
         self.btn_cancel = QPushButton("Zrušit")
         self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.cancel)
         self.btn_cancel.setStyleSheet("QPushButton { color: #aaa; background: transparent; border: none; margin-top: 10px; } QPushButton:hover { color: #f44; }")
         self.content_layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
-        
         self.worker = DownloadWorker(url, size)
         self.worker.progress.connect(self.pbar.setValue)
         self.worker.finished.connect(self.done)
         self.worker.error.connect(lambda e: self.lbl_status.setText(f"Chyba: {e}"))
         self.worker.start()
-
     def done(self, path):
         self.accept()
         self.on_success(path)
-
     def cancel(self):
         self.worker.stop()
         self.reject()
@@ -192,9 +166,11 @@ class DownloadWorker(QThread):
         self.is_running = True
     def run(self):
         try:
-            temp_dir = tempfile.gettempdir()
-            # Ukládáme jako Installer.exe
-            target_path = os.path.join(temp_dir, f"WingetInstaller_Setup_{random.randint(1000,9999)}.exe")
+            # ZMĚNA: Ukládáme do složky Downloads místo do Temp
+            # To je bezpečnější a Windows to méně blokuje
+            downloads_path = str(Path.home() / "Downloads")
+            target_path = os.path.join(downloads_path, f"WingetInstaller_Setup_{random.randint(1000,9999)}.exe")
+            
             if os.path.exists(target_path): os.remove(target_path)
             
             headers = {'User-Agent': 'WingetInstaller-App'}
@@ -276,19 +252,23 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí instalátor a tvrdě ukončí aplikaci.
+        Spustí instalátor přes shell a počká chvíli, než zabije aplikaci.
         """
         try:
             if not os.path.exists(installer_path):
-                raise FileNotFoundError("Stažený instalátor nebyl nalezen (možná ho smazal Antivir?).")
+                raise FileNotFoundError(f"Instalátor nebyl nalezen na: {installer_path}")
 
-            # Použijeme subprocess s shell=True, je to robustnější než startfile
-            subprocess.Popen(f'"{installer_path}"', shell=True)
+            # 1. Spustíme soubor
+            os.startfile(installer_path)
             
-            # Okamžitá smrt
+            # 2. DŮLEŽITÉ: Počkáme 2 sekundy.
+            # Dáváme Windows čas na to, aby spustil proces, zkontroloval ho antivirem a otevřel okno.
+            # Kdybychom aplikaci zabili hned, Windows by ten start zrušil.
+            time.sleep(2)
+            
+            # 3. TVRDÉ UKONČENÍ
             os._exit(0)
             
         except Exception as e:
-            # Pokud se to nepovede, zobrazíme chybu a aplikace BĚŽÍ DÁL
-            QMessageBox.critical(self.parent, "Chyba spuštění", f"Nepodařilo se spustit instalátor:\n{e}")
-            # Tady nedáváme exit, aby si uživatel mohl přečíst chybu
+            QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}\n\nSoubor je stažen ve složce Downloads.")
+            if self.on_continue: self.on_continue()
