@@ -1,7 +1,7 @@
 ; -- installer_script.iss --
 
 #define MyAppName "Univerzální aplikace"
-#define MyAppVersion "7.3.9.5" ; TOTO MUSÍTE MĚNIT PŘI KAŽDÉM RELEASE
+#define MyAppVersion "7.3.9.7" ; TOTO MUSÍTE MĚNIT PŘI KAŽDÉM RELEASE
 #define MyAppPublisher "Vissse"
 #define MyAppExeName "AI_Winget_Installer.exe" ; Název vašeho zkompilovaného EXE z PyInstalleru
 

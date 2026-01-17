@@ -4,13 +4,11 @@ import requests
 import subprocess
 import tempfile
 import random
-import time
-from pathlib import Path
 from packaging import version
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QProgressBar, QPushButton, QWidget, QApplication)
+                             QProgressBar, QPushButton, QWidget, QApplication, QMessageBox)
 from PyQt6.QtGui import QMouseEvent
 
 # Import konfigurace
@@ -26,7 +24,7 @@ GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
 # ============================================================================
-# 1. UI PRVKY
+# 1. UI PRVKY (Toast, Dialogy) - Zůstávají beze změny
 # ============================================================================
 
 class StatusToast(QDialog):
@@ -124,7 +122,8 @@ class StyledDialogBase(QDialog):
 class UpdatePromptDialog(StyledDialogBase):
     def __init__(self, parent, new_version):
         super().__init__(parent, title="Dostupná aktualizace")
-        lbl = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br><span style='color:#888'>(Aplikace se restartuje)</span>")
+        # Text upraven, aby zmiňoval instalátor
+        lbl = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br><span style='color:#888'>(Aplikace se ukončí a spustí se instalátor)</span>")
         lbl.setWordWrap(True)
         lbl.setStyleSheet("color: #ddd; font-size: 14px; border: none;")
         self.content_layout.addWidget(lbl)
@@ -151,7 +150,7 @@ class UpdateDownloadDialog(StyledDialogBase):
         self.setFixedSize(400, 180)
         self.on_success = on_success
         
-        self.lbl_status = QLabel("Stahuji aktualizaci...")
+        self.lbl_status = QLabel("Stahuji instalátor...")
         self.lbl_status.setStyleSheet("color: white; border: none;")
         self.content_layout.addWidget(self.lbl_status)
         
@@ -195,7 +194,8 @@ class DownloadWorker(QThread):
     def run(self):
         try:
             temp_dir = tempfile.gettempdir()
-            target_path = os.path.join(temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
+            # Ukládáme jako Installer.exe
+            target_path = os.path.join(temp_dir, f"WingetInstaller_Setup_{random.randint(1000,9999)}.exe")
             if os.path.exists(target_path): os.remove(target_path)
             
             headers = {'User-Agent': 'WingetInstaller-App'}
@@ -248,9 +248,11 @@ class AppUpdater(QObject):
             tag = data.get("tag_name", "0.0.0").lstrip("v")
             try:
                 if version.parse(tag) > version.parse(CURRENT_VERSION):
+                    # Zde hledáme soubor končící na .exe (což by měl být ten instalátor v Release)
                     assets = [a for a in data.get("assets", []) if a["name"].endswith(".exe")]
                     if assets:
                         proceed = False
+                        # Vybereme první nalezený EXE (instalátor)
                         self.prompt_update(tag, assets[0]["browser_download_url"], assets[0].get("size", 0))
                 else:
                     if not self.silent:
@@ -268,85 +270,29 @@ class AppUpdater(QObject):
     def prompt_update(self, ver, url, size):
         dlg = UpdatePromptDialog(self.parent, ver)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            dl = UpdateDownloadDialog(self.parent, url, size, self.perform_restart)
+            # Změna: Voláme metodu run_installer místo starého restartu
+            dl = UpdateDownloadDialog(self.parent, url, size, self.run_installer)
             dl.exec()
+            # Pokud uživatel stornuje stažení, pokračujeme
             if dl.result() == QDialog.DialogCode.Rejected and self.on_continue:
                 self.on_continue()
         elif self.on_continue:
             self.on_continue()
 
-    def perform_restart(self, downloaded_file_path):
+    def run_installer(self, installer_path):
         """
-        Vytvoří BAT skript, který bezpečně nahradí aplikaci.
-        Opravuje chybu 'Failed to remove temporary directory'.
+        Spustí stažený instalátor v plném grafickém režimu a ukončí tuto aplikaci.
         """
         try:
-            current_exe_path = Path(sys.executable).resolve()
+            # Spustíme instalátor bez parametrů (žádné /SILENT)
+            # Tím se otevře klasické okno průvodce instalací.
+            subprocess.Popen([installer_path])
             
-            # Detekce, zda běžíme v IDE
-            if not current_exe_path.name.lower().endswith(".exe") or "python" in current_exe_path.name.lower(): 
-                self.show_toast("Vývojářský režim", "Aktualizace stažena, v IDE se neprovádí.")
-                if self.on_continue: self.on_continue()
-                return
-
-            temp_dir = tempfile.gettempdir()
-            bat_path = os.path.join(temp_dir, f"update_fix_{random.randint(1000,9999)}.bat")
-            
-            # Čištění proměnných prostředí, které by mohly držet zámky
-            clean_env = os.environ.copy()
-            clean_env.pop('_MEIPASS2', None)
-            clean_env.pop('_MEIPASS', None)
-
-            # === BAT SKRIPT ===
-            # Změna: Skript čeká déle (3s) a zkouší smyčku.
-            # Důležité: 'start ""' spouští novou verzi jako oddělený proces.
-            bat_content = f"""
-@echo off
-chcp 65001 > nul
-timeout /t 3 /nobreak > nul
-
-:RETRY_LOOP
-del "{str(current_exe_path)}" 2>nul
-if exist "{str(current_exe_path)}" (
-    move /Y "{str(current_exe_path)}" "{str(current_exe_path)}.old" > nul
-)
-
-if exist "{str(current_exe_path)}" (
-    timeout /t 1 > nul
-    goto RETRY_LOOP
-)
-
-:: Přesun staženého souboru na místo původního
-move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
-
-:: Spuštění nové verze
-start "" "{str(current_exe_path)}"
-
-:: Úklid dočasných souborů
-del "{str(current_exe_path)}.old" 2>nul
-(goto) 2>nul & del "%~f0"
-"""
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
-
-            # DŮLEŽITÁ OPRAVA: Nastavení CWD na temp adresář
-            # Pokud bychom nechali CWD na složce aplikace, PyInstaller by nemohl smazat _MEI složku
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            subprocess.Popen(
-                str(bat_path), 
-                shell=True, 
-                env=clean_env, 
-                startupinfo=startupinfo,
-                cwd=temp_dir,           # <--- TOTO JE KLÍČOVÁ OPRAVA
-                close_fds=True          # <--- Odpojení file descriptorů
-            )
-            
+            # Okamžitě ukončíme tuto aplikaci, aby instalátor mohl přepsat soubory,
+            # zatímco uživatel bude klikat v instalačním okně.
             QApplication.quit()
             sys.exit(0)
-
+            
         except Exception as e:
-            print(f"Instalace selhala: {e}")
-            self.show_toast("Chyba aktualizace", f"Selhalo spuštění skriptu: {e}")
+            QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}")
             if self.on_continue: self.on_continue()

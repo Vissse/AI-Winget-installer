@@ -18,3 +18,5 @@ build/
 .vscode/
 
 .readmeaiignore
+
+installer_script.iss
