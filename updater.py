@@ -9,8 +9,8 @@ from packaging import version
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer, QPoint
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QProgressBar, QPushButton, QWidget, QFrame, QApplication)
-from PyQt6.QtGui import QColor, QScreen
+                             QProgressBar, QPushButton, QWidget, QApplication)
+from PyQt6.QtGui import QMouseEvent
 
 # Import konfigurace
 try:
@@ -24,19 +24,15 @@ except ImportError:
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
-# --- 1. TOAST NOTIFIKACE (Vypadá jako na vašem obrázku) ---
+# --- 1. TOAST NOTIFIKACE (Beze změny) ---
 class StatusToast(QDialog):
-    """
-    Neblokující bublina, která se zobrazí a po chvíli sama zmizí.
-    Vypadá přesně jako 'Aktuální' box na vašem screenu.
-    """
+    """Neblokující bublina, která se zobrazí a po chvíli sama zmizí."""
     def __init__(self, parent, title, message, duration=3000):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(300, 80)
         
-        # Styl kontejneru (Tmavě šedá, lehký border)
         self.container = QWidget(self)
         self.container.setGeometry(0, 0, 300, 80)
         self.container.setStyleSheet(f"""
@@ -51,47 +47,40 @@ class StatusToast(QDialog):
         layout.setContentsMargins(15, 10, 15, 10)
         layout.setSpacing(2)
         
-        # Nadpis (např. "Aktuální")
         lbl_title = QLabel(title)
         lbl_title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px; border: none;")
         layout.addWidget(lbl_title)
         
-        # Zpráva (např. "Máte nejnovější verzi...")
         lbl_msg = QLabel(message)
         lbl_msg.setStyleSheet("color: #cccccc; font-size: 11px; border: none;")
         layout.addWidget(lbl_msg)
         
-        # Animace zmizení
-        self.duration = duration
-        QTimer.singleShot(self.duration, self.fade_out)
-        
-        # Pozicování - Zobrazí se uprostřed nad parent oknem nebo u myši
+        QTimer.singleShot(duration, self.fade_out)
         self.center_on_parent(parent)
 
     def center_on_parent(self, parent):
-        if parent:
+        if parent and parent.isVisible():
             geo = parent.geometry()
-            # Umístíme to doprostřed okna
             x = geo.x() + (geo.width() - self.width()) // 2
             y = geo.y() + (geo.height() - self.height()) // 2
             self.move(x, y)
         else:
-            # Fallback na střed obrazovky
             screen = QApplication.primaryScreen().geometry()
             self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
 
     def fade_out(self):
         self.close()
 
-# --- 2. UPDATE DIALOGY (Pro případ, že JE update) ---
+# --- 2. UPDATE DIALOGY (S implementací tažení myší a hover efekty) ---
 
 class StyledDialogBase(QDialog):
-    """Základní okno pro update dialogy"""
+    """Základní okno s možností posouvání myší."""
     def __init__(self, parent=None, title="Update"):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(450, 220) 
+        self.drag_pos = None # Proměnná pro sledování pozice myši při tažení
 
         self.window_layout = QVBoxLayout(self)
         self.window_layout.setContentsMargins(0, 0, 0, 0)
@@ -119,7 +108,10 @@ class StyledDialogBase(QDialog):
         close_btn.setFixedSize(30, 30)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.reject)
-        close_btn.setStyleSheet("QPushButton { background: transparent; color: #aaa; border: none; } QPushButton:hover { color: white; background: #c42b1c; border-radius: 4px; }")
+        close_btn.setStyleSheet("""
+            QPushButton { background: transparent; color: #aaa; border: none; }
+            QPushButton:hover { color: white; background: #c42b1c; border-radius: 4px; }
+        """)
         t_layout.addWidget(close_btn)
         
         self.container_layout.addWidget(title_bar)
@@ -129,6 +121,24 @@ class StyledDialogBase(QDialog):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(20, 20, 20, 20)
         self.container_layout.addWidget(self.content_widget)
+
+    # --- Implementace tažení okna myší ---
+    def mousePressEvent(self, event: QMouseEvent):
+        # Povolit tažení pouze levým tlačítkem a pokud se nekliklo na widget uvnitř (např. tlačítko)
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Uložíme si offset myši od levého horního rohu okna
+            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        # Pokud držíme levé tlačítko a máme uloženou pozici, hýbeme oknem
+        if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos:
+            self.move(event.globalPosition().toPoint() - self.drag_pos)
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        # Reset pozice po puštění tlačítka
+        self.drag_pos = None
 
 class UpdatePromptDialog(StyledDialogBase):
     def __init__(self, parent, new_version):
@@ -141,34 +151,43 @@ class UpdatePromptDialog(StyledDialogBase):
         
         btns = QHBoxLayout()
         btn_no = QPushButton("Později")
+        btn_no.setCursor(Qt.CursorShape.PointingHandCursor) # Kurzor ruky
         btn_no.clicked.connect(self.reject)
-        btn_no.setStyleSheet("background: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px; padding: 6px 15px;")
+        # CSS s hover efektem
+        btn_no.setStyleSheet("""
+            QPushButton { background: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px; padding: 6px 15px; }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); color: white; border-color: #777; }
+        """)
         
         btn_yes = QPushButton("Aktualizovat")
+        btn_yes.setCursor(Qt.CursorShape.PointingHandCursor) # Kurzor ruky
         btn_yes.clicked.connect(self.accept)
-        btn_yes.setStyleSheet(f"background: {COLORS.get('accent', '#0078d4')}; color: white; border: none; border-radius: 4px; padding: 6px 15px; font-weight: bold;")
+        # CSS s hover efektem (světlejší modrá)
+        accent_color = COLORS.get('accent', '#0078d4')
+        btn_yes.setStyleSheet(f"""
+            QPushButton {{ background-color: {accent_color}; color: white; border: none; border-radius: 4px; padding: 6px 15px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: #3292e0; }} 
+        """)
         
         btns.addWidget(btn_no)
         btns.addWidget(btn_yes)
         self.content_layout.addLayout(btns)
 
+# ... (DownloadWorker, UpdateCheckerWorker beze změny) ...
 class DownloadWorker(QThread):
     progress = pyqtSignal(int)
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
-
     def __init__(self, url, total_size):
         super().__init__()
         self.url = url
         self.total_size = total_size
         self.is_running = True
-
     def run(self):
         try:
             temp_dir = tempfile.gettempdir()
             target_path = os.path.join(temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
             if os.path.exists(target_path): os.remove(target_path)
-
             response = requests.get(self.url, stream=True)
             downloaded = 0
             with open(target_path, "wb") as f:
@@ -180,10 +199,17 @@ class DownloadWorker(QThread):
                         if self.total_size > 0:
                             self.progress.emit(int((downloaded / self.total_size) * 100))
             if self.is_running: self.finished.emit(target_path)
-        except Exception as e:
-            self.error.emit(str(e))
-
+        except Exception as e: self.error.emit(str(e))
     def stop(self): self.is_running = False
+
+class UpdateCheckerWorker(QThread):
+    result = pyqtSignal(dict)
+    def run(self):
+        try:
+            r = requests.get(f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest", timeout=5)
+            if r.status_code == 200: self.result.emit({'status': 'ok', 'data': r.json()})
+            else: self.result.emit({'status': 'error', 'msg': str(r.status_code)})
+        except Exception as e: self.result.emit({'status': 'error', 'msg': str(e)})
 
 class UpdateDownloadDialog(StyledDialogBase):
     def __init__(self, parent, url, size, on_success):
@@ -200,8 +226,13 @@ class UpdateDownloadDialog(StyledDialogBase):
         self.content_layout.addWidget(self.pbar)
         
         self.btn_cancel = QPushButton("Zrušit")
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor) # Kurzor ruky
         self.btn_cancel.clicked.connect(self.cancel)
-        self.btn_cancel.setStyleSheet("color: #aaa; background: transparent; border: none;")
+        # CSS s hover efektem (červená pro zrušení)
+        self.btn_cancel.setStyleSheet("""
+            QPushButton { color: #aaa; background: transparent; border: none; padding: 5px 10px; border-radius: 4px;}
+            QPushButton:hover { color: white; background-color: #c42b1c; }
+        """)
         self.content_layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
         
         self.worker = DownloadWorker(url, size)
@@ -218,16 +249,7 @@ class UpdateDownloadDialog(StyledDialogBase):
         self.worker.stop()
         self.reject()
 
-class UpdateCheckerWorker(QThread):
-    result = pyqtSignal(dict)
-    def run(self):
-        try:
-            r = requests.get(f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest", timeout=5)
-            if r.status_code == 200: self.result.emit({'status': 'ok', 'data': r.json()})
-            else: self.result.emit({'status': 'error', 'msg': str(r.status_code)})
-        except Exception as e: self.result.emit({'status': 'error', 'msg': str(e)})
-
-# --- 3. HLAVNÍ LOGIKA (S OPRAVENÝM RESTARTEM) ---
+# --- 3. HLAVNÍ LOGIKA (Beze změny) ---
 
 class AppUpdater(QObject):
     def __init__(self, parent_window):
@@ -237,11 +259,7 @@ class AppUpdater(QObject):
 
     def check_for_updates(self, silent=True, on_continue=None):
         self.silent = silent
-        # Uložíme on_continue jen pokud je zadán, nebo pokud je to první volání.
-        # Tím zabráníme, aby druhá "tichá" kontrola vymazala startovací callback.
-        if on_continue is not None:
-            self.on_continue = on_continue
-            
+        if on_continue is not None: self.on_continue = on_continue
         self.worker = UpdateCheckerWorker()
         self.worker.result.connect(self.handle_result)
         self.worker.start()
@@ -252,14 +270,12 @@ class AppUpdater(QObject):
             data = res['data']
             tag = data.get("tag_name", "0.0.0").lstrip("v")
             try:
-                # Logika: Pokud je na GitHubu novější verze
                 if version.parse(tag) > version.parse(CURRENT_VERSION):
                     assets = [a for a in data.get("assets", []) if a["name"].endswith(".exe")]
                     if assets:
                         proceed = False
                         self.prompt_update(tag, assets[0]["browser_download_url"], assets[0].get("size", 0))
                 else:
-                    # NENÍ UPDATE -> ZOBRAZIT TOAST (pokud to není silent start)
                     if not self.silent:
                         self.show_toast("Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
             except Exception as e:
@@ -269,7 +285,6 @@ class AppUpdater(QObject):
             self.on_continue()
 
     def show_toast(self, title, msg):
-        # Vytvoříme a zobrazíme Toast notifikaci
         toast = StatusToast(self.parent, title, msg)
         toast.show()
 
@@ -284,57 +299,72 @@ class AppUpdater(QObject):
             self.on_continue()
 
     def perform_restart(self, new_exe):
-        """
-        ZDE JE TA ZÁSADNÍ OPRAVA:
-        Používáme explorer.exe breakaway metodu z vašeho starého kódu.
-        To zajistí čistý start nové verze bez závislostí na starém procesu.
-        """
         try:
             current_exe = Path(sys.executable).resolve()
             
-            # Detekce dev prostředí vs build
-            if not str(current_exe).lower().endswith(".exe"):
-                print(f"Dev mode update sim: {new_exe}")
+            # Detekce vývojového prostředí vs zkompilované exe
+            if not str(current_exe).lower().endswith(".exe") or "python" in str(current_exe).lower():
+                print(f"Dev mode - update by se uložil sem: {new_exe}")
                 if self.on_continue: self.on_continue()
                 return
 
             temp_dir = tempfile.gettempdir()
             bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
             
-            # Čištění prostředí od PyInstalleru (kritické pro update!)
+            # Čištění prostředí pro PyInstaller (aby nová verze načetla správné knihovny)
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
 
-            # Bat skript z vašeho původního souboru
+            # --- VYLEPŠENÝ BAT SKRIPT ---
+            # 1. Force kill procesu
+            # 2. Smyčka: Zkouší smazat soubor. Pokud to nejde (je zamčený), čeká a zkusí to znovu.
+            # 3. Teprve až zmizí starý soubor, přesune tam nový.
+            # 4. Spustí program přes explorer.exe (přesně jako předtím).
             bat_content = f"""
 @echo off
 chcp 65001 > nul
+
+:: 1. Ukončení procesu aplikace
 taskkill /F /PID {os.getpid()} > nul 2>&1
+
+:: Krátká pauza pro uvolnění zámků systému
 timeout /t 2 /nobreak > nul
 
-:LOOP
-del "{str(current_exe)}" 2>nul
+:DELETE_LOOP
+:: 2. Pokus o smazání starého exe (Force)
+del /F /Q "{str(current_exe)}" 2>nul
+
+:: 3. Kontrola, zda soubor stále existuje
 if exist "{str(current_exe)}" (
     timeout /t 1 > nul
-    goto LOOP
+    goto DELETE_LOOP
 )
 
+:: 4. Přesun nového souboru (nyní je cesta volná)
 move /Y "{new_exe}" "{str(current_exe)}" > nul
 
-echo Spoustim pres Explorer...
+:: 5. Spuštění nové verze "jako uživatel"
+echo Spoustim novou verzi...
 explorer.exe "{str(current_exe)}"
 
+:: 6. Smazání tohoto skriptu
 (goto) 2>nul & del "%~f0"
 """
-            with open(bat_path, "w", encoding="utf-8") as f: f.write(bat_content)
+            with open(bat_path, "w", encoding="utf-8") as f:
+                f.write(bat_content)
             
+            # Spuštění skriptu skrytě, ale nezávisle na aplikaci
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
             subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
-            sys.exit() # Okamžité ukončení
+            
+            # Okamžité ukončení Pythonu, aby se uvolnil soubor
+            QApplication.quit()
+            sys.exit(0)
             
         except Exception as e:
             print(f"Restart failed: {e}")
+            # Pokud to selže, pustíme uživatele do staré verze
             if self.on_continue: self.on_continue()
