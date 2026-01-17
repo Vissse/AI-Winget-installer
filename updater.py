@@ -24,7 +24,7 @@ GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
 # ============================================================================
-# 1. UI PRVKY (Toast, Dialogy) - Zůstávají beze změny
+# 1. UI PRVKY
 # ============================================================================
 
 class StatusToast(QDialog):
@@ -122,7 +122,6 @@ class StyledDialogBase(QDialog):
 class UpdatePromptDialog(StyledDialogBase):
     def __init__(self, parent, new_version):
         super().__init__(parent, title="Dostupná aktualizace")
-        # Text upraven, aby zmiňoval instalátor
         lbl = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br><span style='color:#888'>(Aplikace se ukončí a spustí se instalátor)</span>")
         lbl.setWordWrap(True)
         lbl.setStyleSheet("color: #ddd; font-size: 14px; border: none;")
@@ -248,11 +247,9 @@ class AppUpdater(QObject):
             tag = data.get("tag_name", "0.0.0").lstrip("v")
             try:
                 if version.parse(tag) > version.parse(CURRENT_VERSION):
-                    # Zde hledáme soubor končící na .exe (což by měl být ten instalátor v Release)
                     assets = [a for a in data.get("assets", []) if a["name"].endswith(".exe")]
                     if assets:
                         proceed = False
-                        # Vybereme první nalezený EXE (instalátor)
                         self.prompt_update(tag, assets[0]["browser_download_url"], assets[0].get("size", 0))
                 else:
                     if not self.silent:
@@ -270,10 +267,8 @@ class AppUpdater(QObject):
     def prompt_update(self, ver, url, size):
         dlg = UpdatePromptDialog(self.parent, ver)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # Změna: Voláme metodu run_installer místo starého restartu
             dl = UpdateDownloadDialog(self.parent, url, size, self.run_installer)
             dl.exec()
-            # Pokud uživatel stornuje stažení, pokračujeme
             if dl.result() == QDialog.DialogCode.Rejected and self.on_continue:
                 self.on_continue()
         elif self.on_continue:
@@ -281,28 +276,17 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí instalátor jako ZCELA NEZÁVISLÝ proces (Detached).
-        Tím se zajistí, že instalátor nebude blokovat smazání _MEI složky.
+        Spustí instalátor přes Windows Shell (jako dvojklik myší)
+        a okamžitě tvrdě ukončí aplikaci. 
+        Tím obejdeme smazání _MEI složky (nevznikne chyba) a o úklid se postará boot_system.py při příštím startu.
         """
         try:
-            # 1. Konstanta pro Windows: Spustit proces bez připojení k rodičovské konzoli
-            DETACHED_PROCESS = 0x00000008
+            # 1. Otevření souboru přes systém (vyvolá UAC dialog, pokud je třeba)
+            os.startfile(installer_path)
             
-            # 2. Spuštění s kompletním odpojením vstupů/výstupů (DEVNULL)
-            # To je klíčové - instalátor nesmí "držet" žádná vlákna k původní aplikaci
-            subprocess.Popen(
-                [installer_path],
-                creationflags=DETACHED_PROCESS,
-                close_fds=True,           # Zavře sdílené deskriptory souborů
-                shell=False,              # Důležité: nepoužívat shell, spouštíme přímo exe
-                stdin=subprocess.DEVNULL, # Odpojit vstup
-                stdout=subprocess.DEVNULL,# Odpojit výstup
-                stderr=subprocess.DEVNULL # Odpojit chybový výstup
-            )
-            
-            # 3. Okamžitá smrt aplikace
-            QApplication.quit()
-            sys.exit(0)
+            # 2. TVRDÉ UKONČENÍ
+            # Aplikace zmizí, nic se nečistí, žádná chyba nevyskakuje.
+            os._exit(0)
             
         except Exception as e:
             QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}")
