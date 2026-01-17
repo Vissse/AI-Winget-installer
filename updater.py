@@ -276,18 +276,19 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí instalátor přes Windows Shell (jako dvojklik myší)
-        a okamžitě tvrdě ukončí aplikaci. 
-        Tím obejdeme smazání _MEI složky (nevznikne chyba) a o úklid se postará boot_system.py při příštím startu.
+        Spustí instalátor a tvrdě ukončí aplikaci.
         """
         try:
-            # 1. Otevření souboru přes systém (vyvolá UAC dialog, pokud je třeba)
-            os.startfile(installer_path)
+            if not os.path.exists(installer_path):
+                raise FileNotFoundError("Stažený instalátor nebyl nalezen (možná ho smazal Antivir?).")
+
+            # Použijeme subprocess s shell=True, je to robustnější než startfile
+            subprocess.Popen(f'"{installer_path}"', shell=True)
             
-            # 2. TVRDÉ UKONČENÍ
-            # Aplikace zmizí, nic se nečistí, žádná chyba nevyskakuje.
+            # Okamžitá smrt
             os._exit(0)
             
         except Exception as e:
-            QMessageBox.critical(self.parent, "Chyba", f"Nepodařilo se spustit instalátor:\n{e}")
-            if self.on_continue: self.on_continue()
+            # Pokud se to nepovede, zobrazíme chybu a aplikace BĚŽÍ DÁL
+            QMessageBox.critical(self.parent, "Chyba spuštění", f"Nepodařilo se spustit instalátor:\n{e}")
+            # Tady nedáváme exit, aby si uživatel mohl přečíst chybu

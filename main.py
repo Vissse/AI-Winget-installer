@@ -341,20 +341,26 @@ if __name__ == "__main__":
     except ImportError: pass
 
     app = QApplication(sys.argv)
+    
+    # === TOTO JE TA GLOBÁLNÍ OPRAVA ===
+    # Jakmile se aplikace rozhodne skončit, natvrdo ji zabijeme.
+    # Tím se PyInstaller nestihne pokusit smazat _MEI složku a nevyhodí chybu.
+    app.aboutToQuit.connect(lambda: os._exit(0))
+    # ==================================
+
     splash = SplashScreen()
     splash.show()
     
     def start_program():
         global window
-        # Vytvoříme okno skryté
         window = MainWindow()
         
-        # Funkce pro zobrazení
         def launch_app_interface():
             window.show()
 
-        # Spustíme kontrolu. Pokud uživatel dá "Později", zavolá se launch_app_interface
         window.updater.check_for_updates(silent=True, on_continue=launch_app_interface)
 
     splash.finished.connect(start_program)
-    sys.exit(app.exec())
+    
+    # Zde už není potřeba sys.exit, protože app.exec() se ukončí přes aboutToQuit -> os._exit(0)
+    app.exec()
