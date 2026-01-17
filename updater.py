@@ -103,10 +103,9 @@ class StyledDialogBase(QDialog):
 
 # --- DIALOG PRO POTVRZENÍ AKTUALIZACE ---
 class UpdatePromptDialog(StyledDialogBase):
-    def __init__(self, parent, new_version, on_yes, on_no):
+    def __init__(self, parent, new_version):
+        # Odstraněny parametry on_yes/on_no, nejsou potřeba
         super().__init__(parent, title="Dostupná aktualizace")
-        self.on_yes = on_yes
-        self.on_no = on_no
         
         lbl_info = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br>(Aplikace se restartuje)")
         lbl_info.setWordWrap(True)
@@ -119,13 +118,15 @@ class UpdatePromptDialog(StyledDialogBase):
         btn_later = QPushButton("Později")
         btn_later.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_later.setFixedHeight(35)
-        btn_later.clicked.connect(self.reject) # Reject zavolá close -> on_no logic
+        # Tlačítko Později prostě zavře dialog s kódem Rejected
+        btn_later.clicked.connect(self.reject) 
         btn_later.setStyleSheet(f"background-color: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px;")
         
         btn_update = QPushButton("Aktualizovat")
         btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_update.setFixedHeight(35)
-        btn_update.clicked.connect(self.accept_update)
+        # Tlačítko Aktualizovat zavře dialog s kódem Accepted
+        btn_update.clicked.connect(self.accept)
         btn_update.setStyleSheet(f"background-color: {COLORS.get('accent', '#0078d4')}; color: white; border: none; border-radius: 4px; font-weight: bold;")
         
         btn_layout.addWidget(btn_later)
@@ -326,21 +327,27 @@ class AppUpdater(QObject):
         dlg.exec()
 
     def _show_update_prompt(self, ver, url, size):
-        # Dialog pro potvrzení
-        dialog = UpdatePromptDialog(
-            self.parent, 
-            ver, 
-            on_yes=lambda: self._start_download(url, size),
-            on_no=self._continue_flow
-        )
-        dialog.exec()
+        # Vytvoříme dialog
+        dialog = UpdatePromptDialog(self.parent, ver)
+        
+        # Spustíme ho a čekáme na výsledek (blokuje kód, dokud uživatel neklikne)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted:
+            # Uživatel klikl na "Aktualizovat"
+            self._start_download(url, size)
+        else:
+            # Uživatel klikl na "Později" NEBO zavřel okno křížkem (Rejected)
+            self._continue_flow()
 
     def _start_download(self, url, size):
         # Dialog pro stahování
         dl_dialog = UpdateDownloadDialog(self.parent, url, size, self._perform_restart)
         dl_dialog.exec()
-        # Pokud user stahování zruší (dialog se zavře bez restartu), program nepokračuje (nebo můžeme zavolat _continue_flow)
-        # Zde předpokládám, že pokud zruší stahování, asi chce do aplikace:
+        
+        # Pokud se stahování dokončí úspěšně, zavolá se _perform_restart a aplikace se ukončí.
+        # Pokud se kód dostane sem, znamená to, že uživatel stahování zrušil (klikl na Zrušit/Křížek).
+        # V tom případě musíme normálně spustit aplikaci.
         if dl_dialog.result() == QDialog.DialogCode.Rejected:
             self._continue_flow()
 
