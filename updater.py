@@ -281,15 +281,26 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí stažený instalátor v plném grafickém režimu a ukončí tuto aplikaci.
+        Spustí instalátor jako ZCELA NEZÁVISLÝ proces (Detached).
+        Tím se zajistí, že instalátor nebude blokovat smazání _MEI složky.
         """
         try:
-            # Spustíme instalátor bez parametrů (žádné /SILENT)
-            # Tím se otevře klasické okno průvodce instalací.
-            subprocess.Popen([installer_path])
+            # 1. Konstanta pro Windows: Spustit proces bez připojení k rodičovské konzoli
+            DETACHED_PROCESS = 0x00000008
             
-            # Okamžitě ukončíme tuto aplikaci, aby instalátor mohl přepsat soubory,
-            # zatímco uživatel bude klikat v instalačním okně.
+            # 2. Spuštění s kompletním odpojením vstupů/výstupů (DEVNULL)
+            # To je klíčové - instalátor nesmí "držet" žádná vlákna k původní aplikaci
+            subprocess.Popen(
+                [installer_path],
+                creationflags=DETACHED_PROCESS,
+                close_fds=True,           # Zavře sdílené deskriptory souborů
+                shell=False,              # Důležité: nepoužívat shell, spouštíme přímo exe
+                stdin=subprocess.DEVNULL, # Odpojit vstup
+                stdout=subprocess.DEVNULL,# Odpojit výstup
+                stderr=subprocess.DEVNULL # Odpojit chybový výstup
+            )
+            
+            # 3. Okamžitá smrt aplikace
             QApplication.quit()
             sys.exit(0)
             

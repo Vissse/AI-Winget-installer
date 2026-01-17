@@ -2,6 +2,10 @@
 venv/
 env/
 
+installer_script.iss
+
+output/
+
 # Python cache (zbytečné)
 __pycache__/
 *.pyc
@@ -19,6 +23,3 @@ build/
 
 .readmeaiignore
 
-installer_script.iss
-
-Output/
