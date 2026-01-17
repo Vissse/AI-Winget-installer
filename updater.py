@@ -308,77 +308,65 @@ class AppUpdater(QObject):
                 if self.on_continue: self.on_continue()
                 return
 
-            # --- CÍLOVÁ CESTA: PLOCHA (DESKTOP) ---
-            # Získáme cestu k ploše uživatele
+            # Cesta k ploše (Desktop)
             desktop_path = Path(os.path.join(os.environ["USERPROFILE"], "Desktop"))
             
-            # Získáme verzi z názvu staženého souboru nebo použijeme generický název
-            # Můžete si zvolit formát, např: "MojApp_v7.3.6.exe"
-            # Zde pro jistotu zachováme název původního souboru, aby se nehromadily ikony,
-            # ale uložíme ho na PLOCHU (pokud tam nebyl).
+            # Cílový soubor na ploše (zachová název původního exe)
             file_name = current_exe.name 
             target_path = desktop_path / file_name
 
             temp_dir = tempfile.gettempdir()
             bat_path = os.path.join(temp_dir, f"updater_{random.randint(1000,9999)}.bat")
             
-            # 1. Čištění ENV (Důležité pro PyInstaller)
+            # Vyčištění prostředí
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
 
-            # 2. BAT SKRIPT
-            # - Zabije starý proces
-            # - Počká
-            # - Smaže starý soubor (pokud existoval jinde nebo na ploše)
-            # - Přesune staženou aktualizaci na Plochu
-            # - Spustí ji přes Explorer
+            # --- BAT SKRIPT (UPDATE ONLY) ---
+            # 1. Ukončí proces
+            # 2. Smaže starý soubor
+            # 3. Přesune nový
+            # 4. KONEC (Žádný start)
             bat_content = f"""
 @echo off
-:: Zabít proces aplikace
+:: 1. Zabít proces aplikace
 taskkill /F /PID {os.getpid()} > nul 2>&1
 
 :: Pauza pro uvolnění zámků
 timeout /t 1 /nobreak > nul
 
 :DELETE_LOOP
-:: Zkusit smazat původní soubor (pokud se liší od cíle, smaže se starý, pokud je stejný, přepíše se)
+:: 2. Smyčka pro smazání starého souboru
 if exist "{str(current_exe)}" (
     del /F /Q "{str(current_exe)}" 2>nul
 )
-:: Pokud se mazání nedaří (je zamčeno), zkusíme to znovu
 if exist "{str(current_exe)}" (
     timeout /t 1 > nul
     goto DELETE_LOOP
 )
 
-:: Přesun nové verze na Plochu (Target Path)
+:: 3. Přesun nové verze na Plochu
 move /Y "{new_exe}" "{str(target_path)}" > nul
 
-:: Spuštění nové verze přes Explorer (zajistí správná práva a ikonu na liště)
-start "" explorer.exe "{str(target_path)}"
-
-:: Úklid bat souboru
+:: 4. Pouze úklid a konec (ŽÁDNÝ START)
 (goto) 2>nul & del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
-            # 3. SPUŠTĚNÍ BATU (ZCELA IZOLOVANĚ)
-            # Toto vyřeší chybu "Failed to remove temporary directory _MEI..."
+            # Spuštění skriptu zcela tiše a izolovaně
             subprocess.Popen(
                 str(bat_path),
                 shell=True,
                 env=clean_env,
-                # CREATE_NO_WINDOW = 0x08000000 (Skryje okno příkazového řádku)
-                creationflags=0x08000000,
-                # DŮLEŽITÉ: Přesměrování do DEVNULL odpojí roury, takže PyInstaller může smazat temp
+                creationflags=0x08000000, # CREATE_NO_WINDOW
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
 
-            # 4. Okamžité ukončení
+            # Okamžité ukončení této aplikace
             QApplication.quit()
             sys.exit(0)
             
