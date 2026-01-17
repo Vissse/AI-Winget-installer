@@ -339,10 +339,26 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     splash = SplashScreen()
     splash.show()
-    if not is_admin(): pass
-    def start():
+    
+    if not is_admin(): 
+        pass # Zde by mohla být admin logika
+
+    def start_program():
         global window
+        # 1. Vytvoříme okno, ale NEZOBRAZÍME HO (hide)
         window = MainWindow()
-        window.show()
-    splash.finished.connect(start)
+        
+        # 2. Definujeme funkci, která se zavolá, až bude bezpečné spustit aplikaci
+        # (buď není update, nebo ho uživatel odmítl)
+        def launch_app_interface():
+            window.show()
+
+        # 3. Spustíme kontrolu aktualizací
+        # Aplikace čeká (splash se zavře, nic není vidět, jen případný popup aktualizace)
+        # Pokud update není, okamžitě se zavolá launch_app_interface
+        window.updater.check_for_updates(silent=True, on_continue=launch_app_interface)
+
+    # Po dokončení splashe se zavolá start_program
+    splash.finished.connect(start_program)
+    
     sys.exit(app.exec())
