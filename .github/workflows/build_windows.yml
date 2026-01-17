@@ -2,7 +2,7 @@ name: Build Windows App
 
 on:
   push:
-    # Tímto se to spustí při KAŽDÉM pushnutí do jakékoliv větve
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -25,12 +25,10 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        # Oprava: --name určuje název výsledného .exe souboru
-        pyinstaller --noconsole --onefile --clean --add-data "program_icon.png;." --icon=program_icon.png --hidden-import="PIL" --hidden-import="google.genai" --hidden-import="packaging" --name="AI_Winget_Installer" main.py
+        pyinstaller --noconsole --onefile --clean --add-data "program_icon.png;." --icon=program_icon.png --hidden-import="PIL" --hidden-import="google.genai" --hidden-import="packaging" --hidden-import="PyQt6" --hidden-import="PyQt6.QtCore" --hidden-import="PyQt6.QtGui" --hidden-import="PyQt6.QtWidgets" --name="AI_Winget_Installer" main.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: AI-Winget-Windows-EXE
-        # OPRAVENO: Cesta musí odpovídat názvu v --name výše
         path: dist/AI_Winget_Installer.exe
