@@ -1,10 +1,9 @@
 import sys
 import os
 import requests
-import time
 import subprocess
 import tempfile
-from pathlib import Path
+import time
 from packaging import version
 
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer
@@ -23,11 +22,10 @@ except ImportError:
 
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
-# Fixní název souboru, abychom ho mohli v boot_system.py najít a smazat
-INSTALLER_FILENAME = "WingetInstaller_Setup_Update.exe"
+INSTALLER_FILENAME = "UniversalApp_Setup.exe"
 
 # ============================================================================
-# 1. UI PRVKY (Toast, Dialogy) - Zůstávají beze změny
+# 1. UI PRVKY
 # ============================================================================
 
 class StatusToast(QDialog):
@@ -169,11 +167,11 @@ class DownloadWorker(QThread):
         self.is_running = True
     def run(self):
         try:
-            # ZMĚNA: Ukládáme do Downloads (aby to sedělo s boot_system.py)
-            downloads_path = str(Path.home() / "Downloads")
-            target_path = os.path.join(downloads_path, INSTALLER_FILENAME)
+            # === STAHOVÁNÍ DO TEMPU ===
+            # V režimu --onedir je to bezpečné, aplikace běží odjinud
+            temp_dir = tempfile.gettempdir()
+            target_path = os.path.join(temp_dir, INSTALLER_FILENAME)
             
-            # Pokud existuje starý, smažeme ho
             if os.path.exists(target_path): 
                 try: os.remove(target_path)
                 except: pass
@@ -195,11 +193,10 @@ class DownloadWorker(QThread):
                             self.progress.emit(int((downloaded / self.total_size) * 100))
             
             if self.is_running: 
-                # Kontrola, zda soubor skutečně existuje
                 if os.path.exists(target_path):
                     self.finished.emit(target_path)
                 else:
-                    self.error.emit("Soubor se po stažení nepodařilo najít.")
+                    self.error.emit("Soubor se nepodařilo uložit.")
 
         except Exception as e: 
             self.error.emit(str(e))
@@ -245,9 +242,9 @@ class AppUpdater(QObject):
                         self.prompt_update(tag, assets[0]["browser_download_url"], assets[0].get("size", 0))
                 else:
                     if not self.silent:
-                        self.show_toast("Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
+                        self.show_toast("Aktuální", f"Verze {CURRENT_VERSION} je aktuální.")
             except Exception as e:
-                print(f"Chyba při porovnávání verzí: {e}")
+                print(f"Chyba verze: {e}")
         
         if proceed and self.on_continue:
             self.on_continue()
@@ -268,20 +265,24 @@ class AppUpdater(QObject):
 
     def run_installer(self, installer_path):
         """
-        Spustí instalátor a ukončí aplikaci.
+        Spustí instalátor jako DETACHED PROCESS a zabije aplikaci.
         """
         try:
             if not os.path.exists(installer_path):
-                raise FileNotFoundError(f"Instalátor nebyl nalezen na: {installer_path}")
+                QMessageBox.critical(self.parent, "Chyba", "Instalátor nebyl nalezen.")
+                if self.on_continue: self.on_continue()
+                return
 
-            # Použijeme subprocess s shell=True a 'start', což je na Windows nejspolehlivější
-            # pro vyvolání UAC a spuštění instalátoru mimo kontext Pythonu.
-            subprocess.Popen(f'start "" "{installer_path}"', shell=True)
+            # DETACHED_PROCESS = 0x00000008
+            # Zajistí, že nový proces (instalátor) nebude dědit konzoli ani handles rodiče.
+            subprocess.Popen(
+                [installer_path],
+                creationflags=0x00000008,
+                close_fds=True,
+                shell=False
+            )
             
-            # Krátká pauza, aby se příkaz stihl provést
-            time.sleep(1)
-            
-            # TVRDÉ UKONČENÍ - zabrání chybě s _MEI složkou
+            # Okamžitá smrt aplikace
             os._exit(0)
             
         except Exception as e:

@@ -25,11 +25,10 @@ from updater import AppUpdater
 
 def resource_path(relative_path):
     """ 
-    Získá absolutní cestu k souboru.
-    Upraveno pro --onedir: Hledá soubory vedle .exe souboru.
+    Získá absolutní cestu k souboru pro --onedir.
+    Hledá soubory přímo vedle .exe souboru.
     """
     try:
-        # Pokud běžíme jako zkompilované EXE
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -154,14 +153,13 @@ class HelpDialog(QDialog):
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
-            if event.position().y() <= 50:
-                self.old_pos = event.globalPosition().toPoint()
+            self.drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if self.old_pos:
-            delta = event.globalPosition().toPoint() - self.old_pos
-            self.move(self.pos() + delta)
-            self.old_pos = event.globalPosition().toPoint()
+        if event.buttons() == Qt.MouseButton.LeftButton and self.drag_pos:
+            self.move(event.globalPosition().toPoint() - self.drag_pos)
+            event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         self.old_pos = None
@@ -175,9 +173,6 @@ class MainWindow(QMainWindow):
         icon_path = resource_path("program_icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        else:
-            # Fallback ikona
-            pass
         
         self.apply_custom_title_bar()
 
@@ -300,17 +295,15 @@ class MainWindow(QMainWindow):
         except: pass
 
 if __name__ == "__main__":
-    # 1. Boot Checks (Úklid nepořádku po minulé verzi)
+    # 1. Boot Checks (Úklid nepořádku po minulé verzi v Tempu)
     try:
-        import boot_system
-        boot_system.perform_boot_checks()
-    except ImportError: pass
+        boot_system.cleanup_installer()
+    except Exception: pass
 
     app = QApplication(sys.argv)
     
-    # === POJISTKA PROTI CHYBÁM PŘI VYPÍNÁNÍ ===
-    # V režimu --onedir to není tak kritické jako u --onefile,
-    # ale je to dobrá praxe pro čisté ukončení bez hlášek.
+    # 2. TVRDÉ UKONČENÍ
+    # Zajistí, že proces nezůstane viset a neblokuje soubory při aktualizaci
     app.aboutToQuit.connect(lambda: os._exit(0))
 
     splash = SplashScreen()
