@@ -11,10 +11,6 @@ def perform_boot_checks():
     """
     Spustí kritické kontroly prostředí pro PyInstaller.
     """
-    # --- KRITICKÁ OPRAVA PRO UPDATE (Podle dokumentace PyInstaller) ---
-    # Pokud stará verze nastavila _MEIPASS2 (vnucuje staré knihovny),
-    # musíme to smazat, aby si nová verze načetla své vlastní, správné verze.
-    # Toto řeší situace, kdy se bootloader chytí, ale Python by mohl být zmatený.
     if "_MEIPASS2" in os.environ:
         del os.environ["_MEIPASS2"]
 

@@ -272,34 +272,25 @@ class AppUpdater(QObject):
         elif self.on_continue:
             self.on_continue()
 
-    def perform_restart(self, new_exe):
-        """
-        TOTO JE PŘESNĚ TA METODA ZE STARÉHO SKRIPTU, UPRAVENÁ PRO PYQT6.
-        Používá explorer.exe pro čistý start.
-        """
+    def _perform_restart(self, downloaded_file_path):
         try:
-            current_exe = Path(sys.executable).resolve()
+            current_exe_path = Path(sys.executable).resolve()
             
-            # Detekce dev prostředí
-            if not str(current_exe).lower().endswith(".exe") or "python" in str(current_exe).lower():
-                print(f"Dev mode update sim: {new_exe}")
+            if not current_exe_path.name.lower().endswith(".exe"): 
+                print(f"Dev mode update sim: {downloaded_file_path}")
                 if self.on_continue: self.on_continue()
                 return
 
             temp_dir = tempfile.gettempdir()
             bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
             
-            # 1. Vyčistíme prostředí od PyInstalleru (KLÍČOVÉ PRO UPDATE)
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
-
-            # 2. BAT SKRIPT - PŘESNĚ JAKO VE VAŠEM PŮVODNÍM UPDATER.PY
-            # - Zabije proces
-            # - Počká
-            # - Smaže starý soubor
-            # - Přesune nový
-            # - Spustí novou verzi přes Explorer
+            
+            # --- Tady je změna: Používáme EXPLORER.EXE ---
+            # Explorer ignoruje environmentální proměnné rodiče,
+            # takže aplikace nastartuje naprosto čistě.
             bat_content = f"""
 @echo off
 chcp 65001 > nul
@@ -307,43 +298,32 @@ taskkill /F /PID {os.getpid()} > nul 2>&1
 timeout /t 2 /nobreak > nul
 
 :LOOP
-del "{str(current_exe)}" 2>nul
-if exist "{str(current_exe)}" (
+del "{str(current_exe_path)}" 2>nul
+if exist "{str(current_exe_path)}" (
     timeout /t 1 > nul
     goto LOOP
 )
 
-move /Y "{new_exe}" "{str(current_exe)}" > nul
+move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
 echo Spoustim pres Explorer (Breakaway)...
-explorer.exe "{str(current_exe)}"
+explorer.exe "{str(current_exe_path)}"
 
 (goto) 2>nul & del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
-            
-            # Startup info pro skrytí okna CMD
+
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            # Spouštíme batch file
+            subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
+            
+            self.parent.quit()
+            sys.exit()
 
-            # 3. SPUŠTĚNÍ - ZDE JE OPRAVA PRO "Failed to remove temporary directory"
-            # Musíme přesměrovat stdin/stdout/stderr do DEVNULL, aby child process (cmd.exe)
-            # nedržel roury otevřené. Díky tomu se PyInstaller může v klidu ukončit a smazat temp.
-            subprocess.Popen(
-                str(bat_path), 
-                shell=True, 
-                env=clean_env, 
-                startupinfo=startupinfo,
-                stdin=subprocess.DEVNULL,   # <--- TOTO OPRAVUJE CHYBU _MEI
-                stdout=subprocess.DEVNULL,  # <--- TOTO OPRAVUJE CHYBU _MEI
-                stderr=subprocess.DEVNULL   # <--- TOTO OPRAVUJE CHYBU _MEI
-            )
-            
-            # 4. Ukončení aplikace
-            QApplication.quit()
-            sys.exit(0)
-            
         except Exception as e:
-            print(f"Restart failed: {e}")
+            print(f"Instalace selhala: {e}")
+            # Pokud se to nepovede, pokračujeme v běhu staré verze
             if self.on_continue: self.on_continue()
