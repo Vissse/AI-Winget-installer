@@ -4,6 +4,7 @@ import requests
 import subprocess
 import tempfile
 import random
+import time
 from pathlib import Path
 from packaging import version
 
@@ -25,7 +26,7 @@ GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
 # ============================================================================
-# 1. UI PRVKY (MODERNÍ VZHLED PYQT6)
+# 1. UI PRVKY
 # ============================================================================
 
 class StatusToast(QDialog):
@@ -66,7 +67,6 @@ class StatusToast(QDialog):
             self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
 
 class StyledDialogBase(QDialog):
-    """Základ pro okna (Update nalezen, Stahování) s možností posunu myší."""
     def __init__(self, parent=None, title="Update"):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
@@ -173,6 +173,7 @@ class UpdateDownloadDialog(StyledDialogBase):
 
     def done(self, path):
         self.accept()
+        # Volání callback funkce pro restart
         self.on_success(path)
 
     def cancel(self):
@@ -180,7 +181,7 @@ class UpdateDownloadDialog(StyledDialogBase):
         self.reject()
 
 # ============================================================================
-# 2. WORKERS (LOGIKA NA POZADÍ)
+# 2. WORKERS
 # ============================================================================
 
 class DownloadWorker(QThread):
@@ -197,7 +198,10 @@ class DownloadWorker(QThread):
             temp_dir = tempfile.gettempdir()
             target_path = os.path.join(temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
             if os.path.exists(target_path): os.remove(target_path)
-            response = requests.get(self.url, stream=True)
+            
+            headers = {'User-Agent': 'WingetInstaller-App'}
+            response = requests.get(self.url, headers=headers, stream=True, timeout=10)
+            
             downloaded = 0
             with open(target_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -229,6 +233,7 @@ class AppUpdater(QObject):
         super().__init__()
         self.parent = parent_window
         self.on_continue = None
+        self.silent = False
 
     def check_for_updates(self, silent=True, on_continue=None):
         self.silent = silent
@@ -252,7 +257,7 @@ class AppUpdater(QObject):
                     if not self.silent:
                         self.show_toast("Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
             except Exception as e:
-                print(e)
+                print(f"Chyba při porovnávání verzí: {e}")
         
         if proceed and self.on_continue:
             self.on_continue()
@@ -264,66 +269,97 @@ class AppUpdater(QObject):
     def prompt_update(self, ver, url, size):
         dlg = UpdatePromptDialog(self.parent, ver)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            # ZDE BYLA CHYBA: Volání self.perform_restart
             dl = UpdateDownloadDialog(self.parent, url, size, self.perform_restart)
             dl.exec()
-            # Pokud user stahování zruší, pokračujeme do appky
+            # Pokud uživatel zruší stahování v polovině, aplikace by měla pokračovat
             if dl.result() == QDialog.DialogCode.Rejected and self.on_continue:
                 self.on_continue()
         elif self.on_continue:
             self.on_continue()
 
-    def _perform_restart(self, downloaded_file_path):
+    # OPRAVA: Odstraněno podtržítko na začátku (bývalo _perform_restart)
+    def perform_restart(self, downloaded_file_path):
+        """
+        Vytvoří BAT skript, který počká na ukončení této aplikace,
+        přepíše EXE soubor a znovu ho spustí.
+        """
         try:
             current_exe_path = Path(sys.executable).resolve()
             
-            if not current_exe_path.name.lower().endswith(".exe"): 
-                print(f"Dev mode update sim: {downloaded_file_path}")
+            # Detekce, zda běžíme v IDE nebo jako zkompilované EXE
+            if not current_exe_path.name.lower().endswith(".exe") or "python" in current_exe_path.name.lower(): 
+                print(f"[DEV MODE] Staženo do: {downloaded_file_path}")
+                self.show_toast("Vývojářský režim", "Aktualizace stažena, ale v Pythonu se neprovádí restart.")
                 if self.on_continue: self.on_continue()
                 return
 
             temp_dir = tempfile.gettempdir()
-            bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
+            bat_path = os.path.join(temp_dir, f"update_script_{random.randint(1000,9999)}.bat")
             
+            # Vyčistíme proměnné prostředí, aby nová verze nenastartovala v "safe mode" staré verze
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
+
+            # === VYLEPŠENÝ BATCH SKRIPT ===
+            # Windows trik: Nelze smazat běžící EXE, ale lze ho PŘEJMENOVAT.
+            # 1. Přejmenujeme běžící (starý) exe na .old
+            # 2. Přesuneme stažený (nový) exe na místo původního
+            # 3. Spustíme nový exe
+            # 4. Smažeme .old a skript
             
-            # --- Tady je změna: Používáme EXPLORER.EXE ---
-            # Explorer ignoruje environmentální proměnné rodiče,
-            # takže aplikace nastartuje naprosto čistě.
             bat_content = f"""
 @echo off
 chcp 65001 > nul
-taskkill /F /PID {os.getpid()} > nul 2>&1
 timeout /t 2 /nobreak > nul
 
-:LOOP
-del "{str(current_exe_path)}" 2>nul
-if exist "{str(current_exe_path)}" (
+:WAIT_LOOP
+tasklist /FI "PID eq {os.getpid()}" 2>NUL | find /I /N "{os.getpid()}" >NUL
+if "%ERRORLEVEL%"=="0" (
     timeout /t 1 > nul
-    goto LOOP
+    goto WAIT_LOOP
 )
 
+:: Zkusíme smazat starý, pokud existuje, nebo ho přesunout do old
+if exist "{str(current_exe_path)}" (
+    del "{str(current_exe_path)}" 2>nul
+    if exist "{str(current_exe_path)}" (
+        move /Y "{str(current_exe_path)}" "{str(current_exe_path)}.old" > nul
+    )
+)
+
+:: Přesun nové verze
 move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
-echo Spoustim pres Explorer (Breakaway)...
-explorer.exe "{str(current_exe_path)}"
+:: Spuštění nové verze
+start "" "{str(current_exe_path)}"
 
+:: Úklid
+del "{str(current_exe_path)}.old" 2>nul
 (goto) 2>nul & del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
+            # Nastavení pro spuštění skrytě (bez černého okna)
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            # Spouštíme batch file
-            subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
+            # Spouštíme batch file zcela odděleně od Python procesu
+            subprocess.Popen(
+                str(bat_path), 
+                shell=True, 
+                env=clean_env, 
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
             
-            self.parent.quit()
-            sys.exit()
+            # Ukončení aplikace
+            QApplication.quit()
+            sys.exit(0)
 
         except Exception as e:
             print(f"Instalace selhala: {e}")
-            # Pokud se to nepovede, pokračujeme v běhu staré verze
+            self.show_toast("Chyba aktualizace", f"Nepodařilo se spustit instalátor: {e}")
             if self.on_continue: self.on_continue()
