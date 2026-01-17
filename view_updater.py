@@ -180,12 +180,12 @@ class UpdaterPage(QWidget):
         
         header.addStretch()
 
-        self.btn_refresh = QPushButton("⟳ Zkontrolovat")
+        self.btn_refresh = QPushButton("⟳ Zkontrolovat aktualizace")
         self._style_btn(self.btn_refresh, COLORS['input_bg'], "white")
         self.btn_refresh.clicked.connect(self.scan_updates)
         header.addWidget(self.btn_refresh)
         
-        self.btn_update_all = QPushButton("🚀 Aktualizovat vše")
+        self.btn_update_all = QPushButton("Aktualizovat vše")
         self._style_btn(self.btn_update_all, COLORS['accent'], "white")
         self.btn_update_all.clicked.connect(self.run_update_all)
         self.btn_update_all.setEnabled(False) # Deaktivováno, dokud nenajdeme updaty
@@ -204,7 +204,10 @@ class UpdaterPage(QWidget):
 
         # --- PROGRESS BAR ---
         self.progress = QProgressBar()
-        self.progress.setStyleSheet(f"QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}")
+        self.progress.setStyleSheet(f"""
+                QProgressBar {{ min-height: 4px; max-height: 4px; background: transparent; border: none; margin-top: 5px; }} 
+                QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}
+            """)
         self.progress.setTextVisible(False)
         self.progress.setRange(0, 0)
         self.progress.hide()
@@ -265,7 +268,7 @@ class UpdaterPage(QWidget):
             return
 
         self.btn_update_all.setEnabled(True)
-        self.btn_update_all.setText(f"🚀 Aktualizovat vše ({len(updates)})")
+        self.btn_update_all.setText(f"Aktualizovat vše ({len(updates)})")
         self.console.append(f"Nalezeno {len(updates)} aktualizací.")
 
         for up in updates:

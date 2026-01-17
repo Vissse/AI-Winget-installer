@@ -68,10 +68,12 @@ class InstantTooltip(QObject):
 class IconWorker(QThread):
     loaded = pyqtSignal(QPixmap)
 
-    def __init__(self, app_id, website=None):
+    # PŘIDÁN PARAMETR: preset_url=None
+    def __init__(self, app_id, website=None, preset_url=None):
         super().__init__()
         self.app_id = app_id
         self.website = website
+        self.preset_url = preset_url
 
     def get_domain(self, url):
         try:
@@ -80,13 +82,31 @@ class IconWorker(QThread):
             return ""
 
     def run(self):
-        if not self.app_id: return
-
+        # 1. PRIORITA: Pokud máme ikonku přímo v presetu, použijeme ji!
         session = requests.Session()
         session.headers.update({'User-Agent': 'Mozilla/5.0'})
-        
-        # Seznam URL, které zkusíme (v pořadí priority)
+
+        if self.preset_url:
+            try:
+                response = session.get(self.preset_url, timeout=3)
+                if response.status_code == 200:
+                    image = QImage()
+                    image.loadFromData(response.content)
+                    if not image.isNull():
+                        pixmap = QPixmap.fromImage(image)
+                        pixmap = pixmap.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        self.loaded.emit(pixmap)
+                        return # Hotovo, končíme
+            except:
+                pass # Pokud selže preset, pokračujeme dál
+
+        if not self.app_id: return
+
+        # ... (zbytek metody run zůstává stejný: Winget API, GitHub, Favicons) ...
         urls_to_try = []
+        
+        # --- 1. ZLATÝ STANDARD: WINGET.RUN API ---
+        # ... kód pokračuje ...
 
         # --- 1. ZLATÝ STANDARD: WINGET.RUN API ---
         # Toto je nejspolehlivější metoda. API nám vrátí přesnou URL ikony definovanou v manifestu.
@@ -319,7 +339,6 @@ class SearchWorker(QThread):
 
 
 # --- 2. VZHLED ŘÁDKU (Widget) ---
-# --- 2. VZHLED ŘÁDKU (Widget) ---
 class AppRowWidget(QWidget):
     def __init__(self, data, mode, parent_controller, cached_icon=None):
         super().__init__()
@@ -328,7 +347,6 @@ class AppRowWidget(QWidget):
         self.controller = parent_controller
         self.tooltip_filter = InstantTooltip()
         
-        # Zde si budeme pamatovat ikonku pro pozdější předání
         self.current_pixmap = cached_icon 
 
         self.setStyleSheet("background-color: transparent;")
@@ -353,13 +371,15 @@ class AppRowWidget(QWidget):
         self.icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_lbl)
 
-        # LOGIKA IKONY:
-        # Pokud jsme dostali ikonku zvenčí (při přidání do fronty), použijeme ji rovnou.
+        # LOGIKA IKONY
         if cached_icon:
             self.set_icon(cached_icon)
         else:
-            # Jinak spustíme stahování (pouze pokud ji nemáme)
-            self.icon_worker = IconWorker(data.get('id'), data.get('website'))
+            self.icon_worker = IconWorker(
+                data.get('id'), 
+                data.get('website'), 
+                data.get('icon_url')
+            )
             self.icon_worker.loaded.connect(self.set_icon)
             self.icon_worker.start()
 
@@ -416,7 +436,8 @@ class AppRowWidget(QWidget):
         
         # 4. TLAČÍTKO AKCE
         self.btn = QPushButton()
-        self.btn.setFixedSize(30, 30)
+        # ZMĚNA: Větší a obdélníkovější tlačítko (nebo zaoblený čtverec)
+        self.btn.setFixedSize(40, 34) 
         self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn.installEventFilter(self.tooltip_filter)
         
@@ -428,20 +449,26 @@ class AppRowWidget(QWidget):
                 self.set_add_state()
             self.btn.clicked.connect(self.add_to_queue)
         else:
-            # --- TLAČÍTKO ODEBRAT (X) ---
-            self.btn.setText("✕") 
+            # --- TLAČÍTKO ODEBRAT (X) - NOVÝ STYL ---
+            self.btn.setFixedSize(30, 30)
+            self.btn.setText("\uE8BB") # Stejný znak jako v HelpDialog
             self.btn.setToolTip("Odebrat z fronty")
+            
             self.btn.setStyleSheet(f"""
                 QPushButton {{ 
                     background-color: transparent; 
-                    color: #666666; 
-                    font-size: 18px; 
-                    font-weight: bold;
+                    color: #777777; 
+                    font-family: 'Segoe MDL2 Assets'; /* Systémový font ikon */
+                    font-size: 10px;                  /* Velikost pro tento font */
                     border: none; 
-                    font-family: Arial, sans-serif; 
                 }}
                 QPushButton:hover {{ 
-                    color: {COLORS['danger']}; 
+                    color: {COLORS['danger']};        /* Červená při najetí */
+                    background-color: rgba(255, 0, 0, 0.1);
+                    border-radius: 4px;
+                }}
+                QPushButton:pressed {{
+                    background-color: rgba(255, 0, 0, 0.2);
                 }}
             """)
             self.btn.clicked.connect(self.remove_from_queue)
@@ -449,31 +476,32 @@ class AppRowWidget(QWidget):
         layout.addWidget(self.btn)
 
     def set_icon(self, pixmap):
-        # Uložíme si pixmapu do proměnné, abychom ji mohli předat dál
         self.current_pixmap = pixmap
         self.icon_lbl.setPixmap(pixmap)
         self.icon_lbl.setText("")
 
     # --- STAVY TLAČÍTKA (Pro Result Mode) ---
+    # --- STAVY TLAČÍTKA (Pro Result Mode) ---
     def set_add_state(self):
-        self.btn.setText("+") 
+        self.btn.setFixedSize(60, 60) # Stejná velikost jako ve frontě
+        self.btn.setText("\uE710")    # Systémový znak "Plus"
         self.btn.setToolTip("Přidat do fronty")
         self.btn.setEnabled(True)
+        
         self.btn.setStyleSheet(f"""
             QPushButton {{ 
                 background-color: transparent; 
-                color: {COLORS['accent']}; 
-                font-size: 24px; 
-                font-weight: bold;
-                border: 1px solid {COLORS['border']}; 
-                border-radius: 15px; 
-                font-family: Arial, sans-serif; 
-                padding-bottom: 3px; 
+                color: #777777; 
+                font-family: 'Segoe MDL2 Assets'; 
+                font-size: 10px; 
+                border: none; 
             }}
             QPushButton:hover {{ 
-                background-color: {COLORS['accent']}; 
-                color: white; 
-                border: 1px solid {COLORS['accent']}; 
+                color: {COLORS['accent']};  /* Modrá při najetí */
+                border-radius: 4px;
+            }}
+            QPushButton:pressed {{
+                background-color: rgba(255, 255, 255, 0.2);
             }}
         """)
 
@@ -481,21 +509,19 @@ class AppRowWidget(QWidget):
         self.btn.setText("✓")
         self.btn.setToolTip("Položka je ve frontě")
         self.btn.setEnabled(False)
+        # ZMĚNA STYLU: Plné zelené tlačítko
         self.btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['success']}; 
                 color: white; 
                 border: none; 
-                border-radius: 15px; 
-                font-size: 16px;
+                border-radius: 6px; 
+                font-size: 18px;
                 font-weight: bold;
-                font-family: Arial, sans-serif;
             }}
         """)
 
     def add_to_queue(self):
-        # PŘEDÁVÁME ULOŽENOU PROMĚNNOU self.current_pixmap
-        # To zajistí, že se předá skutečný obrázek, i když ho label ještě nevykreslil
         self.controller.add_item_to_queue(self.data, cached_icon=self.current_pixmap)
         self.set_checked_state()
 

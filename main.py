@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QListWidget, QListWidgetItem, QStackedWidget, QMessageBox, QLabel, 
                              QPushButton, QDialog, QTextEdit, QFrame)
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtGui import QIcon, QFont, QMouseEvent
 
 import styles
 from config import COLORS
@@ -31,21 +31,94 @@ def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
 
-# --- OKNO S NÁPOVĚDOU ---
+# --- OKNO S NÁPOVĚDOU (MODERNÍ DESIGN) ---
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Jak používat aplikaci")
-        self.setFixedSize(600, 500)
-        self.setStyleSheet(f"background-color: {COLORS['bg_main']}; color: {COLORS['fg']};")
-
-        layout = QVBoxLayout(self)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(600, 520)
         
-        title = QLabel("📖 Průvodce aplikací")
-        title.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['accent']}; margin-bottom: 10px;")
-        layout.addWidget(title)
+        # Hlavní kontejner
+        self.container = QWidget(self)
+        self.container.setGeometry(0, 0, 600, 520)
+        self.container.setStyleSheet("background: transparent; border: none;")
+        
+        main_layout = QVBoxLayout(self.container)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Textové pole s vysvětlením
+        # 1. HORNÍ LIŠTA
+        title_bar = QWidget()
+        title_bar.setFixedHeight(45)
+        title_bar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {COLORS['bg_sidebar']};
+                border: 1px solid {COLORS['border']};
+                border-bottom: 1px solid {COLORS['border']};
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }}
+        """)
+        
+        title_layout = QHBoxLayout(title_bar)
+        title_layout.setContentsMargins(15, 0, 0, 0) # Nulový pravý margin, aby tlačítko šlo až do rohu
+        
+        lbl_title = QLabel("📖  Průvodce aplikací")
+        lbl_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px; border: none; background: transparent;")
+        title_layout.addWidget(lbl_title)
+        
+        title_layout.addStretch()
+        
+        # Tlačítko zavřít (X) - Nativní Windows Styl
+        btn_close_x = QPushButton("\uE8BB") # Symbol křížku v Segoe MDL2
+        btn_close_x.setFixedSize(46, 44) # Širší a vysoké téměř jako lišta
+        btn_close_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close_x.clicked.connect(self.reject)
+        
+        btn_close_x.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #cccccc;
+                border: none;
+                border-top-right-radius: 7px; /* Kopíruje radius okna */
+                font-family: 'Segoe MDL2 Assets'; /* Windows Systémový font ikon */
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #e81123;   /* Červená při najetí */
+                color: white;
+            }
+            QPushButton:pressed {
+                background-color: #b00b1a;
+                color: white;
+            }
+        """)
+        title_layout.addWidget(btn_close_x)
+        
+        main_layout.addWidget(title_bar)
+
+        # 2. OBSAH OKNA
+        content_widget = QWidget()
+        content_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {COLORS['bg_main']};
+                border-left: 1px solid {COLORS['border']};
+                border-right: 1px solid {COLORS['border']};
+                border-bottom: 1px solid {COLORS['border']};
+                border-top: none;
+                border-bottom-left-radius: 8px;
+                border-bottom-right-radius: 8px;
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+            }}
+        """)
+        
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        
         text_area = QTextEdit()
         text_area.setReadOnly(True)
         text_area.setStyleSheet(f"""
@@ -57,6 +130,15 @@ class HelpDialog(QDialog):
                 font-size: 14px;
                 color: #ddd;
             }}
+            QScrollBar:vertical {{
+                border: none; background-color: {COLORS['bg_sidebar']}; width: 8px; margin: 0px; border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: #444; min-height: 20px; border-radius: 4px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background-color: {COLORS['accent']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
         """)
         
         html_content = f"""
@@ -76,20 +158,38 @@ class HelpDialog(QDialog):
         <p><i>Tip: V Nastavení si můžete upravit chování instalátoru (tichý režim, instalace pro všechny uživatele).</i></p>
         """
         text_area.setHtml(html_content)
-        layout.addWidget(text_area)
+        content_layout.addWidget(text_area)
 
         btn_ok = QPushButton("Rozumím")
         btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setFixedHeight(40)
         btn_ok.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['accent']}; color: white; border: none;
-                padding: 10px; border-radius: 5px; font-weight: bold;
+                border-radius: 6px; font-weight: bold; font-size: 14px;
             }}
             QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}
         """)
         btn_ok.clicked.connect(self.accept)
-        layout.addWidget(btn_ok)
+        content_layout.addWidget(btn_ok)
 
+        main_layout.addWidget(content_widget)
+        
+        self.old_pos = None
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if event.position().y() <= 50:
+                self.old_pos = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.old_pos:
+            delta = event.globalPosition().toPoint() - self.old_pos
+            self.move(self.pos() + delta)
+            self.old_pos = event.globalPosition().toPoint()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self.old_pos = None
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -97,7 +197,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Univerzální aplikace")
         self.resize(1150, 750)
         
-        # 1. IKONA
         icon_path = resource_path("program_icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -111,16 +210,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Chyba stylů: {e}")
 
-        # Hlavní kontejner
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ============================================================
-        # 1. LEVÝ PANEL (SIDEBAR CONTAINER)
-        # ============================================================
+        # LEVÝ PANEL
         sidebar_container = QWidget()
         sidebar_container.setFixedWidth(260)
         sidebar_container.setStyleSheet(f"background-color: {COLORS['bg_sidebar']}; border-right: 1px solid {COLORS['border']};")
@@ -129,7 +225,6 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
 
-        # A) Horní seznam (Funkce)
         self.sidebar_list = QListWidget()
         self.sidebar_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sidebar_list.setStyleSheet(f"""
@@ -146,29 +241,23 @@ class MainWindow(QMainWindow):
         self.add_sidebar_item("🗑️  Odinstalace aplikací")
         
         sidebar_layout.addWidget(self.sidebar_list)
-
-        # B) Spacer (Tlačí tlačítka dolů)
         sidebar_layout.addStretch()
 
-        # C) Oddělovač
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"background-color: {COLORS['border']}; margin: 10px 15px;")
         sidebar_layout.addWidget(sep)
 
-        # D) Spodní tlačítka (Nastavení + Nápověda)
         bottom_buttons_layout = QHBoxLayout()
         bottom_buttons_layout.setContentsMargins(15, 0, 15, 20)
         bottom_buttons_layout.setSpacing(10)
 
-        # Tlačítko Nastavení
         self.btn_settings = QPushButton("⚙️ Nastavení")
         self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_settings.setFixedHeight(40)
         self.btn_settings.clicked.connect(self.go_to_settings)
         self._style_bottom_btn(self.btn_settings)
         
-        # Tlačítko Nápověda (Otazník)
         self.btn_help = QPushButton("❓")
         self.btn_help.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_help.setFixedSize(40, 40)
@@ -178,118 +267,71 @@ class MainWindow(QMainWindow):
 
         bottom_buttons_layout.addWidget(self.btn_settings, stretch=1)
         bottom_buttons_layout.addWidget(self.btn_help, stretch=0)
-        
         sidebar_layout.addLayout(bottom_buttons_layout)
-
-        # Přidání sidebaru do hlavního okna
         main_layout.addWidget(sidebar_container)
 
-        # ============================================================
-        # 2. PRAVÝ OBSAH (PAGES)
-        # ============================================================
+        # PRAVÝ OBSAH
         self.pages = QStackedWidget()
         main_layout.addWidget(self.pages)
 
-        # Index 0: Installer
         self.pages.addWidget(InstallerPage())          
-        # Index 1: Updater
         self.pages.addWidget(UpdaterPage())            
-        # Index 2: Health
         self.pages.addWidget(HealthCheckPage())        
-        # Index 3: Uninstaller
-        try:
-            self.pages.addWidget(UninstallerPage())    
-        except Exception as e:
-            self.pages.addWidget(QLabel(f"Chyba odinstalace: {e}"))
-        
-        # Index 4: Settings (Už není v listu nahoře)
+        try: self.pages.addWidget(UninstallerPage())    
+        except Exception as e: self.pages.addWidget(QLabel(f"Chyba: {e}"))
         self.pages.addWidget(SettingsPage())           
 
-        # Výchozí stav
         self.sidebar_list.setCurrentRow(0)
-
-    # --- METODY ---
 
     def add_sidebar_item(self, text):
         item = QListWidgetItem(text)
         self.sidebar_list.addItem(item)
 
     def switch_main_page(self, index):
-        """Přepíná mezi hlavními funkcemi (0-3)."""
         if index >= 0:
             self.pages.setCurrentIndex(index)
-            # Resetovat styl tlačítka nastavení (aby nevypadalo aktivně)
             self._style_bottom_btn(self.btn_settings, active=False)
             self._style_bottom_btn(self.btn_help, active=False)
 
     def go_to_settings(self):
-        """Přepne na stránku nastavení (Index 4) a odznačí seznam funkcí."""
-        self.sidebar_list.clearSelection() # Zruší výběr nahoře
-        self.pages.setCurrentIndex(4)      # Přepne na nastavení
-        self._style_bottom_btn(self.btn_settings, active=True) # Zvýrazní tlačítko
+        self.sidebar_list.clearSelection()
+        self.pages.setCurrentIndex(4)
+        self._style_bottom_btn(self.btn_settings, active=True)
 
     def show_help(self):
-        """Otevře dialog s nápovědou."""
         dialog = HelpDialog(self)
         dialog.exec()
 
     def _style_bottom_btn(self, btn, active=False):
-        """Styluje spodní tlačítka."""
         bg_color = COLORS['item_bg'] if active else "transparent"
         border = f"1px solid {COLORS['accent']}" if active else "none"
         text_color = "white" if active else COLORS['sub_text']
-        
         btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {bg_color};
-                color: {text_color};
-                border: {border};
-                border-radius: 6px;
-                font-weight: bold;
-                text-align: center;
+                background-color: {bg_color}; color: {text_color}; border: {border};
+                border-radius: 6px; font-weight: bold; text-align: center;
             }}
-            QPushButton:hover {{
-                background-color: {COLORS['item_hover']};
-                color: white;
-            }}
+            QPushButton:hover {{ background-color: {COLORS['item_hover']}; color: white; }}
         """)
 
     def apply_custom_title_bar(self):
-        """Tmavá lišta pro Windows 11/10."""
         try:
             hwnd = self.winId().__int__() 
-            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            DWMWA_CAPTION_COLOR = 35 
-            DWMWA_TEXT_COLOR = 36
-            
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, byref(c_int(1)), 4)
-
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)
             hex_color = COLORS['bg_sidebar']
-            r = int(hex_color[1:3], 16)
-            g = int(hex_color[3:5], 16)
-            b = int(hex_color[5:7], 16)
-            colorref = b << 16 | g << 8 | r
-
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, byref(c_int(colorref)), 4)
-            
-            white_ref = 255 << 16 | 255 << 8 | 255
-            windll.dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, byref(c_int(white_ref)), 4)
-        except Exception:
-            pass
+            r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(b << 16 | g << 8 | r)), 4)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(255 << 16 | 255 << 8 | 255)), 4)
+        except: pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
     splash = SplashScreen()
     splash.show()
-
-    if not is_admin():
-        pass
-
-    def start_main_app():
+    if not is_admin(): pass
+    def start():
         global window
         window = MainWindow()
         window.show()
-    
-    splash.finished.connect(start_main_app)
+    splash.finished.connect(start)
     sys.exit(app.exec())
