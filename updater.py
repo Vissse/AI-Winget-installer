@@ -173,7 +173,6 @@ class UpdateDownloadDialog(StyledDialogBase):
 
     def done(self, path):
         self.accept()
-        # Volání callback funkce pro restart
         self.on_success(path)
 
     def cancel(self):
@@ -269,97 +268,85 @@ class AppUpdater(QObject):
     def prompt_update(self, ver, url, size):
         dlg = UpdatePromptDialog(self.parent, ver)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # ZDE BYLA CHYBA: Volání self.perform_restart
             dl = UpdateDownloadDialog(self.parent, url, size, self.perform_restart)
             dl.exec()
-            # Pokud uživatel zruší stahování v polovině, aplikace by měla pokračovat
             if dl.result() == QDialog.DialogCode.Rejected and self.on_continue:
                 self.on_continue()
         elif self.on_continue:
             self.on_continue()
 
-    # OPRAVA: Odstraněno podtržítko na začátku (bývalo _perform_restart)
     def perform_restart(self, downloaded_file_path):
         """
-        Vytvoří BAT skript, který počká na ukončení této aplikace,
-        přepíše EXE soubor a znovu ho spustí.
+        Vytvoří BAT skript, který bezpečně nahradí aplikaci.
+        Opravuje chybu 'Failed to remove temporary directory'.
         """
         try:
             current_exe_path = Path(sys.executable).resolve()
             
-            # Detekce, zda běžíme v IDE nebo jako zkompilované EXE
+            # Detekce, zda běžíme v IDE
             if not current_exe_path.name.lower().endswith(".exe") or "python" in current_exe_path.name.lower(): 
-                print(f"[DEV MODE] Staženo do: {downloaded_file_path}")
-                self.show_toast("Vývojářský režim", "Aktualizace stažena, ale v Pythonu se neprovádí restart.")
+                self.show_toast("Vývojářský režim", "Aktualizace stažena, v IDE se neprovádí.")
                 if self.on_continue: self.on_continue()
                 return
 
             temp_dir = tempfile.gettempdir()
-            bat_path = os.path.join(temp_dir, f"update_script_{random.randint(1000,9999)}.bat")
+            bat_path = os.path.join(temp_dir, f"update_fix_{random.randint(1000,9999)}.bat")
             
-            # Vyčistíme proměnné prostředí, aby nová verze nenastartovala v "safe mode" staré verze
+            # Čištění proměnných prostředí, které by mohly držet zámky
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
             clean_env.pop('_MEIPASS', None)
 
-            # === VYLEPŠENÝ BATCH SKRIPT ===
-            # Windows trik: Nelze smazat běžící EXE, ale lze ho PŘEJMENOVAT.
-            # 1. Přejmenujeme běžící (starý) exe na .old
-            # 2. Přesuneme stažený (nový) exe na místo původního
-            # 3. Spustíme nový exe
-            # 4. Smažeme .old a skript
-            
+            # === BAT SKRIPT ===
+            # Změna: Skript čeká déle (3s) a zkouší smyčku.
+            # Důležité: 'start ""' spouští novou verzi jako oddělený proces.
             bat_content = f"""
 @echo off
 chcp 65001 > nul
-timeout /t 2 /nobreak > nul
+timeout /t 3 /nobreak > nul
 
-:WAIT_LOOP
-tasklist /FI "PID eq {os.getpid()}" 2>NUL | find /I /N "{os.getpid()}" >NUL
-if "%ERRORLEVEL%"=="0" (
-    timeout /t 1 > nul
-    goto WAIT_LOOP
-)
-
-:: Zkusíme smazat starý, pokud existuje, nebo ho přesunout do old
+:RETRY_LOOP
+del "{str(current_exe_path)}" 2>nul
 if exist "{str(current_exe_path)}" (
-    del "{str(current_exe_path)}" 2>nul
-    if exist "{str(current_exe_path)}" (
-        move /Y "{str(current_exe_path)}" "{str(current_exe_path)}.old" > nul
-    )
+    move /Y "{str(current_exe_path)}" "{str(current_exe_path)}.old" > nul
 )
 
-:: Přesun nové verze
+if exist "{str(current_exe_path)}" (
+    timeout /t 1 > nul
+    goto RETRY_LOOP
+)
+
+:: Přesun staženého souboru na místo původního
 move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
 
 :: Spuštění nové verze
 start "" "{str(current_exe_path)}"
 
-:: Úklid
+:: Úklid dočasných souborů
 del "{str(current_exe_path)}.old" 2>nul
 (goto) 2>nul & del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
 
-            # Nastavení pro spuštění skrytě (bez černého okna)
+            # DŮLEŽITÁ OPRAVA: Nastavení CWD na temp adresář
+            # Pokud bychom nechali CWD na složce aplikace, PyInstaller by nemohl smazat _MEI složku
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            # Spouštíme batch file zcela odděleně od Python procesu
             subprocess.Popen(
                 str(bat_path), 
                 shell=True, 
                 env=clean_env, 
                 startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                cwd=temp_dir,           # <--- TOTO JE KLÍČOVÁ OPRAVA
+                close_fds=True          # <--- Odpojení file descriptorů
             )
             
-            # Ukončení aplikace
             QApplication.quit()
             sys.exit(0)
 
         except Exception as e:
             print(f"Instalace selhala: {e}")
-            self.show_toast("Chyba aktualizace", f"Nepodařilo se spustit instalátor: {e}")
+            self.show_toast("Chyba aktualizace", f"Selhalo spuštění skriptu: {e}")
             if self.on_continue: self.on_continue()
