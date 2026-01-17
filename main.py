@@ -289,11 +289,8 @@ class MainWindow(QMainWindow):
         
         # === 2. PŘEDÁNÍ UPDATERU DO NASTAVENÍ ===
         self.pages.addWidget(SettingsPage(updater=self.updater))           
-
         self.sidebar_list.setCurrentRow(0)
         
-        # === 3. AUTOMATICKÁ KONTROLA PO STARTU (s odkladem 2s) ===
-        QTimer.singleShot(2000, lambda: self.updater.check_for_updates(silent=True))
 
     def add_sidebar_item(self, text):
         item = QListWidgetItem(text)
@@ -337,32 +334,27 @@ class MainWindow(QMainWindow):
         except: pass
 
 if __name__ == "__main__":
-    # TOTO JE DŮLEŽITÉ PRO PYINSTALLER
-    boot_system.perform_boot_checks()
-    
+    # 1. Boot Checks
+    try:
+        import boot_system
+        boot_system.perform_boot_checks()
+    except ImportError: pass
+
     app = QApplication(sys.argv)
     splash = SplashScreen()
     splash.show()
     
-    if not is_admin(): 
-        pass # Zde by mohla být admin logika
-
     def start_program():
         global window
-        # 1. Vytvoříme okno, ale NEZOBRAZÍME HO (hide)
+        # Vytvoříme okno skryté
         window = MainWindow()
         
-        # 2. Definujeme funkci, která se zavolá, až bude bezpečné spustit aplikaci
-        # (buď není update, nebo ho uživatel odmítl)
+        # Funkce pro zobrazení
         def launch_app_interface():
             window.show()
 
-        # 3. Spustíme kontrolu aktualizací
-        # Aplikace čeká (splash se zavře, nic není vidět, jen případný popup aktualizace)
-        # Pokud update není, okamžitě se zavolá launch_app_interface
+        # Spustíme kontrolu. Pokud uživatel dá "Později", zavolá se launch_app_interface
         window.updater.check_for_updates(silent=True, on_continue=launch_app_interface)
 
-    # Po dokončení splashe se zavolá start_program
     splash.finished.connect(start_program)
-    
     sys.exit(app.exec())

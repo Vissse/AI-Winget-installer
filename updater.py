@@ -237,7 +237,11 @@ class AppUpdater(QObject):
 
     def check_for_updates(self, silent=True, on_continue=None):
         self.silent = silent
-        self.on_continue = on_continue
+        # Uložíme on_continue jen pokud je zadán, nebo pokud je to první volání.
+        # Tím zabráníme, aby druhá "tichá" kontrola vymazala startovací callback.
+        if on_continue is not None:
+            self.on_continue = on_continue
+            
         self.worker = UpdateCheckerWorker()
         self.worker.result.connect(self.handle_result)
         self.worker.start()
