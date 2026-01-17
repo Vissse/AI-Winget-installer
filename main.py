@@ -18,6 +18,7 @@ from view_settings import SettingsPage
 from view_health import HealthCheckPage
 from view_updater import UpdaterPage
 from splash import SplashScreen
+import boot_system
 
 # NOVÝ IMPORT PRO LOGIKU AKTUALIZACÍ
 from updater import AppUpdater
@@ -336,6 +337,9 @@ class MainWindow(QMainWindow):
         except: pass
 
 if __name__ == "__main__":
+    # TOTO JE DŮLEŽITÉ PRO PYINSTALLER
+    boot_system.perform_boot_checks()
+    
     app = QApplication(sys.argv)
     splash = SplashScreen()
     splash.show()

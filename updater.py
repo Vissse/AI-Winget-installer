@@ -7,191 +7,154 @@ import random
 from pathlib import Path
 from packaging import version
 
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QPoint
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QTimer, QPoint
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QProgressBar, QPushButton, QWidget, QFrame)
-from PyQt6.QtGui import QMouseEvent
+                             QProgressBar, QPushButton, QWidget, QFrame, QApplication)
+from PyQt6.QtGui import QColor, QScreen
 
-# Import barev pro styling
+# Import konfigurace
 try:
     from config import CURRENT_VERSION, COLORS
 except ImportError:
-    # Fallback pokud config chybí (pro testování)
-    CURRENT_VERSION = "1.0.0"
+    CURRENT_VERSION = "0.0.0"
     COLORS = {
-        'bg_sidebar': '#2b2b2b',
-        'bg_main': '#1e1e1e',
-        'accent': '#0078d4',
-        'border': '#333333',
-        'text': '#ffffff'
+        'bg_sidebar': '#2b2b2b', 'bg_main': '#1e1e1e', 'accent': '#0078d4', 'border': '#333333', 'text': '#ffffff'
     }
 
 GITHUB_USER = "Vissse"
 REPO_NAME = "Winget-Installer"
 
-# --- ZÁKLADNÍ STYLOVANÉ OKNO ---
+# --- 1. TOAST NOTIFIKACE (Vypadá jako na vašem obrázku) ---
+class StatusToast(QDialog):
+    """
+    Neblokující bublina, která se zobrazí a po chvíli sama zmizí.
+    Vypadá přesně jako 'Aktuální' box na vašem screenu.
+    """
+    def __init__(self, parent, title, message, duration=3000):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.ToolTip | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(300, 80)
+        
+        # Styl kontejneru (Tmavě šedá, lehký border)
+        self.container = QWidget(self)
+        self.container.setGeometry(0, 0, 300, 80)
+        self.container.setStyleSheet(f"""
+            QWidget {{
+                background-color: #2d2d2d; 
+                border: 1px solid #454545;
+                border-radius: 4px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self.container)
+        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setSpacing(2)
+        
+        # Nadpis (např. "Aktuální")
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px; border: none;")
+        layout.addWidget(lbl_title)
+        
+        # Zpráva (např. "Máte nejnovější verzi...")
+        lbl_msg = QLabel(message)
+        lbl_msg.setStyleSheet("color: #cccccc; font-size: 11px; border: none;")
+        layout.addWidget(lbl_msg)
+        
+        # Animace zmizení
+        self.duration = duration
+        QTimer.singleShot(self.duration, self.fade_out)
+        
+        # Pozicování - Zobrazí se uprostřed nad parent oknem nebo u myši
+        self.center_on_parent(parent)
+
+    def center_on_parent(self, parent):
+        if parent:
+            geo = parent.geometry()
+            # Umístíme to doprostřed okna
+            x = geo.x() + (geo.width() - self.width()) // 2
+            y = geo.y() + (geo.height() - self.height()) // 2
+            self.move(x, y)
+        else:
+            # Fallback na střed obrazovky
+            screen = QApplication.primaryScreen().geometry()
+            self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
+
+    def fade_out(self):
+        self.close()
+
+# --- 2. UPDATE DIALOGY (Pro případ, že JE update) ---
+
 class StyledDialogBase(QDialog):
+    """Základní okno pro update dialogy"""
     def __init__(self, parent=None, title="Update"):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # Nastavíme pevnou velikost, ale umožníme resize pokud je třeba
-        self.resize(450, 200) 
-        self.old_pos = None
+        self.resize(450, 220) 
 
-        # Hlavní layout okna (bez marginů, aby background filloval vše)
         self.window_layout = QVBoxLayout(self)
         self.window_layout.setContentsMargins(0, 0, 0, 0)
-        self.window_layout.setSpacing(0)
-
-        # Kontejner pro pozadí a rámeček
+        
         self.container = QWidget(self)
-        self.container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {COLORS.get('bg_main', '#1e1e1e')};
-                border: 1px solid {COLORS.get('border', '#444')};
-                border-radius: 8px;
-            }}
-        """)
+        self.container.setStyleSheet(f"background-color: {COLORS.get('bg_main', '#1e1e1e')}; border: 1px solid {COLORS.get('border', '#444')}; border-radius: 8px;")
         self.window_layout.addWidget(self.container)
-
-        # Layout uvnitř kontejneru
+        
         self.container_layout = QVBoxLayout(self.container)
         self.container_layout.setContentsMargins(0, 0, 0, 0)
-        self.container_layout.setSpacing(0)
 
-        # 1. Horní lišta
-        self.title_bar = QWidget()
-        self.title_bar.setFixedHeight(40)
-        self.title_bar.setStyleSheet(f"""
-            background-color: {COLORS.get('bg_sidebar', '#252526')};
-            border-bottom: 1px solid {COLORS.get('border', '#444')};
-            border-top-left-radius: 8px;
-            border-top-right-radius: 8px;
-            border-bottom-left-radius: 0px;
-            border-bottom-right-radius: 0px;
-        """)
+        # Lišta
+        title_bar = QWidget()
+        title_bar.setFixedHeight(40)
+        title_bar.setStyleSheet(f"background-color: {COLORS.get('bg_sidebar', '#252526')}; border-bottom: 1px solid #444; border-top-left-radius: 8px; border-top-right-radius: 8px;")
+        t_layout = QHBoxLayout(title_bar)
+        t_layout.setContentsMargins(15, 0, 10, 0)
         
-        title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(15, 0, 10, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet("color: white; font-weight: bold; border: none; background: transparent;")
+        t_layout.addWidget(lbl)
+        t_layout.addStretch()
         
-        self.lbl_title = QLabel(title)
-        self.lbl_title.setStyleSheet("color: white; font-weight: bold; font-size: 13px; border: none; background: transparent;")
-        title_layout.addWidget(self.lbl_title)
-        title_layout.addStretch()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.clicked.connect(self.reject)
+        close_btn.setStyleSheet("QPushButton { background: transparent; color: #aaa; border: none; } QPushButton:hover { color: white; background: #c42b1c; border-radius: 4px; }")
+        t_layout.addWidget(close_btn)
         
-        self.btn_close = QPushButton("✕")
-        self.btn_close.setFixedSize(30, 30)
-        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close.clicked.connect(self.reject)
-        self.btn_close.setStyleSheet("""
-            QPushButton { background: transparent; color: #aaa; border: none; font-weight: bold; }
-            QPushButton:hover { color: white; background-color: #c42b1c; border-radius: 4px; }
-        """)
-        title_layout.addWidget(self.btn_close)
+        self.container_layout.addWidget(title_bar)
         
-        self.container_layout.addWidget(self.title_bar)
-
-        # 2. Obsah (Content Widget)
         self.content_widget = QWidget()
         self.content_widget.setStyleSheet("background: transparent; border: none;")
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(20, 20, 20, 20)
-        
         self.container_layout.addWidget(self.content_widget)
 
-
-# --- DIALOG PRO POTVRZENÍ AKTUALIZACE ---
 class UpdatePromptDialog(StyledDialogBase):
     def __init__(self, parent, new_version):
-        # Odstraněny parametry on_yes/on_no, nejsou potřeba
         super().__init__(parent, title="Dostupná aktualizace")
-        
-        lbl_info = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br>(Aplikace se restartuje)")
-        lbl_info.setWordWrap(True)
-        lbl_info.setStyleSheet("color: #ddd; font-size: 14px; border: none;")
-        self.content_layout.addWidget(lbl_info)
-        self.content_layout.addStretch()
-
-        btn_layout = QHBoxLayout()
-        
-        btn_later = QPushButton("Později")
-        btn_later.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_later.setFixedHeight(35)
-        # Tlačítko Později prostě zavře dialog s kódem Rejected
-        btn_later.clicked.connect(self.reject) 
-        btn_later.setStyleSheet(f"background-color: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px;")
-        
-        btn_update = QPushButton("Aktualizovat")
-        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_update.setFixedHeight(35)
-        # Tlačítko Aktualizovat zavře dialog s kódem Accepted
-        btn_update.clicked.connect(self.accept)
-        btn_update.setStyleSheet(f"background-color: {COLORS.get('accent', '#0078d4')}; color: white; border: none; border-radius: 4px; font-weight: bold;")
-        
-        btn_layout.addWidget(btn_later)
-        btn_layout.addWidget(btn_update)
-        self.content_layout.addLayout(btn_layout)
-
-    def accept_update(self):
-        self.accept()
-        self.on_yes()
-    
-    def reject(self):
-        super().reject()
-        self.on_no()
-
-# --- DIALOG PRO STAHOVÁNÍ ---
-class UpdateDownloadDialog(StyledDialogBase):
-    def __init__(self, parent, download_url, size, on_success):
-        super().__init__(parent, title="Stahování aktualizace")
-        self.setFixedSize(400, 200)
-        self.on_success = on_success
-        
-        self.lbl_status = QLabel("Stahuji data...")
-        self.lbl_status.setStyleSheet("color: white; font-size: 14px; border: none;")
-        self.content_layout.addWidget(self.lbl_status)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet(f"""
-            QProgressBar {{ border: 1px solid #444; border-radius: 4px; background-color: #111; text-align: center; color: white; height: 20px; }}
-            QProgressBar::chunk {{ background-color: {COLORS.get('accent', '#0078d4')}; border-radius: 3px; }}
-        """)
-        self.content_layout.addWidget(self.progress_bar)
+        lbl = QLabel(f"Byla nalezena nová verze <b>{new_version}</b>.<br><br>Chcete ji nyní stáhnout a nainstalovat?<br><span style='color:#888'>(Aplikace se restartuje)</span>")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color: #ddd; font-size: 14px; border: none;")
+        self.content_layout.addWidget(lbl)
         self.content_layout.addStretch()
         
-        self.btn_cancel = QPushButton("Zrušit")
-        self.btn_cancel.setFixedSize(100, 30)
-        self.btn_cancel.clicked.connect(self.cancel_download)
-        self.btn_cancel.setStyleSheet("background-color: #d32f2f; color: white; border: none; border-radius: 4px;")
-        self.content_layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+        btns = QHBoxLayout()
+        btn_no = QPushButton("Později")
+        btn_no.clicked.connect(self.reject)
+        btn_no.setStyleSheet("background: transparent; border: 1px solid #555; color: #ddd; border-radius: 4px; padding: 6px 15px;")
+        
+        btn_yes = QPushButton("Aktualizovat")
+        btn_yes.clicked.connect(self.accept)
+        btn_yes.setStyleSheet(f"background: {COLORS.get('accent', '#0078d4')}; color: white; border: none; border-radius: 4px; padding: 6px 15px; font-weight: bold;")
+        
+        btns.addWidget(btn_no)
+        btns.addWidget(btn_yes)
+        self.content_layout.addLayout(btns)
 
-        # Start download
-        self.worker = DownloadWorker(download_url, size)
-        self.worker.progress.connect(self.progress_bar.setValue)
-        self.worker.finished.connect(self.on_download_finished)
-        self.worker.error.connect(self.on_download_error)
-        self.worker.start()
-
-    def on_download_finished(self, path):
-        self.lbl_status.setText("Stahování dokončeno.")
-        self.accept()
-        self.on_success(path)
-
-    def on_download_error(self, err_msg):
-        self.lbl_status.setText(f"Chyba: {err_msg}")
-        self.btn_cancel.setText("Zavřít")
-
-    def cancel_download(self):
-        if self.worker.isRunning():
-            self.worker.stop()
-            self.worker.wait()
-        self.reject()
-
-# --- WORKERS (Beze změny logiky) ---
 class DownloadWorker(QThread):
     progress = pyqtSignal(int)
-    finished = pyqtSignal(str) 
+    finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
     def __init__(self, url, total_size):
@@ -204,7 +167,8 @@ class DownloadWorker(QThread):
         try:
             temp_dir = tempfile.gettempdir()
             target_path = os.path.join(temp_dir, f"WingetInstaller_Update_{random.randint(1000,9999)}.exe")
-            
+            if os.path.exists(target_path): os.remove(target_path)
+
             response = requests.get(self.url, stream=True)
             downloaded = 0
             with open(target_path, "wb") as f:
@@ -214,181 +178,159 @@ class DownloadWorker(QThread):
                         f.write(chunk)
                         downloaded += len(chunk)
                         if self.total_size > 0:
-                            percent = int((downloaded / self.total_size) * 100)
-                            self.progress.emit(percent)
+                            self.progress.emit(int((downloaded / self.total_size) * 100))
             if self.is_running: self.finished.emit(target_path)
         except Exception as e:
             self.error.emit(str(e))
 
     def stop(self): self.is_running = False
 
+class UpdateDownloadDialog(StyledDialogBase):
+    def __init__(self, parent, url, size, on_success):
+        super().__init__(parent, title="Stahování")
+        self.setFixedSize(400, 180)
+        self.on_success = on_success
+        
+        self.lbl_status = QLabel("Stahuji aktualizaci...")
+        self.lbl_status.setStyleSheet("color: white; border: none;")
+        self.content_layout.addWidget(self.lbl_status)
+        
+        self.pbar = QProgressBar()
+        self.pbar.setStyleSheet(f"QProgressBar {{ border: 1px solid #444; background: #111; height: 10px; border-radius: 5px; }} QProgressBar::chunk {{ background: {COLORS.get('accent', '#0078d4')}; border-radius: 4px; }}")
+        self.content_layout.addWidget(self.pbar)
+        
+        self.btn_cancel = QPushButton("Zrušit")
+        self.btn_cancel.clicked.connect(self.cancel)
+        self.btn_cancel.setStyleSheet("color: #aaa; background: transparent; border: none;")
+        self.content_layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.worker = DownloadWorker(url, size)
+        self.worker.progress.connect(self.pbar.setValue)
+        self.worker.finished.connect(self.done)
+        self.worker.error.connect(lambda e: self.lbl_status.setText(f"Chyba: {e}"))
+        self.worker.start()
+
+    def done(self, path):
+        self.accept()
+        self.on_success(path)
+
+    def cancel(self):
+        self.worker.stop()
+        self.reject()
+
 class UpdateCheckerWorker(QThread):
-    result = pyqtSignal(dict) 
-
+    result = pyqtSignal(dict)
     def run(self):
-        api_url = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest"
         try:
-            response = requests.get(api_url, timeout=5)
-            if response.status_code == 200:
-                self.result.emit({'status': 'ok', 'data': response.json()})
-            else:
-                self.result.emit({'status': 'error', 'msg': f"API Error: {response.status_code}"})
-        except Exception as e:
-            self.result.emit({'status': 'error', 'msg': str(e)})
+            r = requests.get(f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest", timeout=5)
+            if r.status_code == 200: self.result.emit({'status': 'ok', 'data': r.json()})
+            else: self.result.emit({'status': 'error', 'msg': str(r.status_code)})
+        except Exception as e: self.result.emit({'status': 'error', 'msg': str(e)})
 
-# --- HLAVNÍ TŘÍDA UPDATERU ---
+# --- 3. HLAVNÍ LOGIKA (S OPRAVENÝM RESTARTEM) ---
+
 class AppUpdater(QObject):
     def __init__(self, parent_window):
         super().__init__()
         self.parent = parent_window
-        self.checker_worker = None
-        self.on_continue_callback = None # Co dělat, když není update
+        self.on_continue = None
 
     def check_for_updates(self, silent=True, on_continue=None):
-        """
-        silent: True = start aplikace (nic neukazuj, když není update)
-        on_continue: Funkce, která se zavolá, pokud se neaktualizuje (tj. spustí se hlavní okno)
-        """
-        self.silent_mode = silent
-        self.on_continue_callback = on_continue
-        
-        self.checker_worker = UpdateCheckerWorker()
-        self.checker_worker.result.connect(self.handle_check_result)
-        self.checker_worker.start()
+        self.silent = silent
+        self.on_continue = on_continue
+        self.worker = UpdateCheckerWorker()
+        self.worker.result.connect(self.handle_result)
+        self.worker.start()
 
-    def handle_check_result(self, result):
-        if result['status'] == 'error':
-            if not self.silent_mode:
-                self._show_msg("Chyba aktualizace", f"Nelze ověřit aktualizace:\n{result['msg']}")
-            self._continue_flow()
-            return
-
-        data = result['data']
-        latest_tag = data.get("tag_name", "0.0.0").lstrip("v")
-        
-        try:
-            if version.parse(latest_tag) > version.parse(CURRENT_VERSION):
-                asset_url, size = self._get_exe_info(data)
-                if asset_url:
-                    # MÁME UPDATE -> Zobrazíme Custom Dialog
-                    self._show_update_prompt(latest_tag, asset_url, size)
+    def handle_result(self, res):
+        proceed = True
+        if res['status'] == 'ok':
+            data = res['data']
+            tag = data.get("tag_name", "0.0.0").lstrip("v")
+            try:
+                # Logika: Pokud je na GitHubu novější verze
+                if version.parse(tag) > version.parse(CURRENT_VERSION):
+                    assets = [a for a in data.get("assets", []) if a["name"].endswith(".exe")]
+                    if assets:
+                        proceed = False
+                        self.prompt_update(tag, assets[0]["browser_download_url"], assets[0].get("size", 0))
                 else:
-                    if not self.silent_mode:
-                        self._show_msg("Chyba", "Nová verze existuje, ale chybí .exe soubor.")
-                    self._continue_flow()
-            else:
-                if not self.silent_mode:
-                    self._show_msg("Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
-                self._continue_flow()
-        except Exception as e:
-            print(f"Update parse error: {e}")
-            self._continue_flow()
-
-    def _continue_flow(self):
-        """Pokud je nastaven callback (start programu), zavoláme ho."""
-        if self.on_continue_callback:
-            self.on_continue_callback()
-
-    def _show_msg(self, title, text):
-        dlg = StyledDialogBase(self.parent, title)
-        # Nastavíme menší výšku pro jednoduchou zprávu, aby to nevypadalo prázdně
-        dlg.setFixedSize(400, 180) 
+                    # NENÍ UPDATE -> ZOBRAZIT TOAST (pokud to není silent start)
+                    if not self.silent:
+                        self.show_toast("Aktuální", f"Máte nejnovější verzi ({CURRENT_VERSION}).")
+            except Exception as e:
+                print(e)
         
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color: white; font-size: 14px; border: none;")
-        lbl.setWordWrap(True)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        
-        # Přidáme label do layoutu
-        dlg.content_layout.addWidget(lbl)
-        dlg.content_layout.addStretch() # Tlačí tlačítko dolů
+        if proceed and self.on_continue:
+            self.on_continue()
 
-        btn = QPushButton("OK")
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.clicked.connect(dlg.accept)
-        btn.setFixedSize(80, 30)
-        btn.setStyleSheet(f"""
-            QPushButton {{ 
-                background-color: {COLORS.get('accent', '#0078d4')}; 
-                color: white; 
-                border: none; 
-                border-radius: 4px; 
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: {COLORS.get('accent_hover', '#0099ff')}; }}
-        """)
-        
-        # Zarovnání tlačítka doprava
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn)
-        
-        dlg.content_layout.addLayout(btn_layout)
-        dlg.exec()
+    def show_toast(self, title, msg):
+        # Vytvoříme a zobrazíme Toast notifikaci
+        toast = StatusToast(self.parent, title, msg)
+        toast.show()
 
-    def _show_update_prompt(self, ver, url, size):
-        # Vytvoříme dialog
-        dialog = UpdatePromptDialog(self.parent, ver)
-        
-        # Spustíme ho a čekáme na výsledek (blokuje kód, dokud uživatel neklikne)
-        result = dialog.exec()
-        
-        if result == QDialog.DialogCode.Accepted:
-            # Uživatel klikl na "Aktualizovat"
-            self._start_download(url, size)
-        else:
-            # Uživatel klikl na "Později" NEBO zavřel okno křížkem (Rejected)
-            self._continue_flow()
+    def prompt_update(self, ver, url, size):
+        dlg = UpdatePromptDialog(self.parent, ver)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            dl = UpdateDownloadDialog(self.parent, url, size, self.perform_restart)
+            dl.exec()
+            if dl.result() == QDialog.DialogCode.Rejected and self.on_continue:
+                self.on_continue()
+        elif self.on_continue:
+            self.on_continue()
 
-    def _start_download(self, url, size):
-        # Dialog pro stahování
-        dl_dialog = UpdateDownloadDialog(self.parent, url, size, self._perform_restart)
-        dl_dialog.exec()
-        
-        # Pokud se stahování dokončí úspěšně, zavolá se _perform_restart a aplikace se ukončí.
-        # Pokud se kód dostane sem, znamená to, že uživatel stahování zrušil (klikl na Zrušit/Křížek).
-        # V tom případě musíme normálně spustit aplikaci.
-        if dl_dialog.result() == QDialog.DialogCode.Rejected:
-            self._continue_flow()
-
-    def _get_exe_info(self, release_data):
-        for asset in release_data.get("assets", []):
-            if asset["name"].lower().endswith(".exe"):
-                return asset["browser_download_url"], asset.get("size", 0)
-        return None, 0
-
-    def _perform_restart(self, downloaded_file_path):
+    def perform_restart(self, new_exe):
+        """
+        ZDE JE TA ZÁSADNÍ OPRAVA:
+        Používáme explorer.exe breakaway metodu z vašeho starého kódu.
+        To zajistí čistý start nové verze bez závislostí na starém procesu.
+        """
         try:
-            current_exe_path = Path(sys.executable).resolve()
-            if not str(current_exe_path).lower().endswith(".exe") or "python" in str(current_exe_path).lower():
-                self._show_msg("Dev Mode", f"Staženo do:\n{downloaded_file_path}\n(Nelze restartovat Python skript)")
-                self._continue_flow()
+            current_exe = Path(sys.executable).resolve()
+            
+            # Detekce dev prostředí vs build
+            if not str(current_exe).lower().endswith(".exe"):
+                print(f"Dev mode update sim: {new_exe}")
+                if self.on_continue: self.on_continue()
                 return
 
             temp_dir = tempfile.gettempdir()
             bat_path = os.path.join(temp_dir, f"updater_winget_{random.randint(1000,9999)}.bat")
+            
+            # Čištění prostředí od PyInstalleru (kritické pro update!)
             clean_env = os.environ.copy()
             clean_env.pop('_MEIPASS2', None)
-            
+            clean_env.pop('_MEIPASS', None)
+
+            # Bat skript z vašeho původního souboru
             bat_content = f"""
 @echo off
 chcp 65001 > nul
 taskkill /F /PID {os.getpid()} > nul 2>&1
 timeout /t 2 /nobreak > nul
+
 :LOOP
-del "{str(current_exe_path)}" 2>nul
-if exist "{str(current_exe_path)}" (
+del "{str(current_exe)}" 2>nul
+if exist "{str(current_exe)}" (
     timeout /t 1 > nul
     goto LOOP
 )
-move /Y "{downloaded_file_path}" "{str(current_exe_path)}" > nul
-explorer.exe "{str(current_exe_path)}"
+
+move /Y "{new_exe}" "{str(current_exe)}" > nul
+
+echo Spoustim pres Explorer...
+explorer.exe "{str(current_exe)}"
+
 (goto) 2>nul & del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f: f.write(bat_content)
+            
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
             subprocess.Popen(str(bat_path), shell=True, env=clean_env, startupinfo=startupinfo)
-            sys.exit()
+            sys.exit() # Okamžité ukončení
+            
         except Exception as e:
-            self._show_msg("Chyba", f"Restart selhal:\n{e}")
+            print(f"Restart failed: {e}")
+            if self.on_continue: self.on_continue()
