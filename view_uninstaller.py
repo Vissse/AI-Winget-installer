@@ -210,7 +210,7 @@ class UninstallerPage(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(20)
         
         # Header

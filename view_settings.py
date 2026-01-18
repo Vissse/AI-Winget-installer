@@ -513,7 +513,7 @@ class SettingsPage(QWidget):
         combo.setFixedWidth(250)
         combo.setCursor(Qt.CursorShape.PointingHandCursor)
         combo.setStyleSheet(f"QComboBox {{ background-color: {COLORS['input_bg']}; color: white; border: 1px solid {COLORS['border']}; padding: 5px; border-radius: 4px; }} QComboBox::drop-down {{ border: none; }}")
-
+        
     def _style_checkbox(self, chk):
         chk.setCursor(Qt.CursorShape.PointingHandCursor)
         # Checkbox styl (čtvereček)

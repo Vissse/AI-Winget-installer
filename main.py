@@ -26,15 +26,11 @@ from updater import AppUpdater
 def resource_path(relative_path):
     """ Získá absolutní cestu k souboru pro dev i pro PyInstaller exe """
     try:
-        # PyInstaller vytváří dočasnou složku _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
-        # Pokud nejsme v exe, jsme v normálním Python skriptu
         base_path = os.path.abspath(".")
-
     return os.path.join(base_path, relative_path)
 
-# (HelpDialog může zůstat stejný)
 class HelpDialog(QDialog):
     pass 
 
@@ -54,7 +50,6 @@ class MainWindow(QMainWindow):
             self.setStyleSheet(styles.get_stylesheet())
         except Exception: pass
 
-        # Inicializace updateru (ale nespouštíme ho zde)
         self.updater = AppUpdater(self)
 
         central_widget = QWidget()
@@ -122,12 +117,22 @@ class MainWindow(QMainWindow):
         
         sidebar_layout.addWidget(self.sidebar_list)
 
-        # Spodní část (Nastavení)
+        # === ÚPRAVA ODDĚLOVAČE (NOVÝ PŘÍSTUP) ===
+        
+        # 1. MEZERA NAHOŘE (Odlepí čáru od seznamu)
+        sidebar_layout.addSpacing(20) 
+
+        # 2. ČÁRA (Jednoduchá, bez složitých marginů)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background-color: {COLORS['border']}; margin: 5px 15px;")
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background-color: {COLORS['border']}; margin-left: 15px; margin-right: 15px;")
         sidebar_layout.addWidget(sep)
 
+        # 3. MEZERA DOLE (Odlepí tlačítko od čáry - posune čáru "výš")
+        sidebar_layout.addSpacing(10)
+
+        # Spodní tlačítka
         bottom_buttons_layout = QHBoxLayout()
         bottom_buttons_layout.setContentsMargins(15, 0, 15, 20)
         bottom_buttons_layout.setSpacing(10)
@@ -142,21 +147,21 @@ class MainWindow(QMainWindow):
         sidebar_layout.addLayout(bottom_buttons_layout)
         main_layout.addWidget(sidebar_container)
 
-        # === HLAVNÍ OBSAH (STACK) ===
+        # === HLAVNÍ OBSAH ===
         self.pages = QStackedWidget()
         main_layout.addWidget(self.pages)
         
         self.home_page = HomePage()
         self.specs_page = SpecsPage()
         
-        self.pages.addWidget(self.home_page)            # Index 0
-        self.pages.addWidget(InstallerPage())           # Index 1
-        self.pages.addWidget(UpdaterPage())             # Index 2
-        self.pages.addWidget(HealthCheckPage())         # Index 3
-        try: self.pages.addWidget(UninstallerPage())    # Index 4
+        self.pages.addWidget(self.home_page)            # 0
+        self.pages.addWidget(InstallerPage())           # 1
+        self.pages.addWidget(UpdaterPage())             # 2
+        self.pages.addWidget(HealthCheckPage())         # 3
+        try: self.pages.addWidget(UninstallerPage())    # 4
         except: self.pages.addWidget(QLabel("Chyba"))
-        self.pages.addWidget(SettingsPage(updater=self.updater)) # Index 5
-        self.pages.addWidget(self.specs_page)           # Index 6
+        self.pages.addWidget(SettingsPage(updater=self.updater)) # 5
+        self.pages.addWidget(self.specs_page)           # 6
         
         self.navigate_to_page(0)
 
@@ -170,12 +175,15 @@ class MainWindow(QMainWindow):
     def add_sidebar_separator(self):
         item = QListWidgetItem("")
         item.setFlags(Qt.ItemFlag.NoItemFlags)
-        item.setSizeHint(QSize(0, 20))
+        item.setSizeHint(QSize(0, 25)) 
         self.sidebar_list.addItem(item)
         
         line_frame = QFrame()
         line_frame.setFrameShape(QFrame.Shape.HLine)
-        line_frame.setStyleSheet(f"background-color: {COLORS['border']}; border: none; min-height: 1px; max-height: 1px; margin: 9px 15px;")
+        line_frame.setStyleSheet(f"""
+            background-color: {COLORS['border']}; border: none; 
+            min-height: 1px; max-height: 1px; margin: 0px 5px; 
+        """)
         self.sidebar_list.setItemWidget(item, line_frame)
 
     def on_sidebar_click(self, item):
@@ -203,12 +211,18 @@ class MainWindow(QMainWindow):
 
     def _style_bottom_btn(self, btn, active=False):
         bg_color = COLORS['item_bg'] if active else "transparent"
-        border = f"1px solid {COLORS['accent']}" if active else "none"
         text_color = "white" if active else COLORS['sub_text']
+        
+        if active:
+            border_style = f"border: none; border-bottom: 3px solid {COLORS['accent']};"
+        else:
+            border_style = "border: none;"
+
         btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {bg_color}; color: {text_color}; border: {border};
-                border-radius: 6px; font-weight: bold; text-align: center;
+                background-color: {bg_color}; color: {text_color}; 
+                {border_style} border-radius: 6px; font-weight: bold; 
+                text-align: center; padding: 0px;
             }}
             QPushButton:hover {{ background-color: {COLORS['item_hover']}; color: white; }}
         """)
@@ -231,26 +245,18 @@ if __name__ == "__main__":
     except Exception: pass
 
     app = QApplication(sys.argv)
-    
-    # 1. Zabraň vypnutí aplikace, když zmizí splash screen a hlavní okno ještě není vidět
     app.setQuitOnLastWindowClosed(False)
-    
     app.aboutToQuit.connect(lambda: os._exit(0))
+    
     splash = SplashScreen()
     splash.show()
 
     def start_program():
         global window
         window = MainWindow()
-        
-        # Callback: Zavolá se, pokud není update, nebo ho uživatel zruší
         def show_app():
             window.show()
-            # 2. Obnovíme standardní chování (aplikace se ukončí po zavření okna)
             app.setQuitOnLastWindowClosed(True)
-
-        # Spustíme kontrolu aktualizací na pozadí (silent=True nezobrazí "Jste aktuální")
-        # Pokud update je -> vyskočí dialog. Pokud dá "Update" -> jede update. Pokud "Zrušit" -> volá show_app.
         window.updater.check_for_updates(silent=True, on_continue=show_app)
 
     splash.finished.connect(start_program)

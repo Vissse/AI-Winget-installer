@@ -46,7 +46,7 @@ class HomePage(QWidget):
         super().__init__()
         
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(50, 50, 50, 50)
+        main_layout.setContentsMargins(40, 40, 40, 40)
         main_layout.setSpacing(20)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         

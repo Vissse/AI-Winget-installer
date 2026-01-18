@@ -549,7 +549,7 @@ class InstallerPage(QWidget):
         """)
 
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setContentsMargins(40, 40, 40, 40)
         main_layout.setSpacing(20)
 
         # === LEVÁ ČÁST (VYHLEDÁVÁNÍ) ===

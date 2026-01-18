@@ -5,8 +5,9 @@ import os
 import subprocess
 import winreg
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QFrame, QScrollArea, QSizePolicy)
-from PyQt6.QtCore import Qt
+                             QFrame, QScrollArea, QSizePolicy, QApplication)
+from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtGui import QColor, QPalette, QCursor
 from config import COLORS
 
 # --- LOGIKA ZÍSKÁVÁNÍ DAT ---
@@ -146,6 +147,101 @@ def get_pc_specs():
         
     return specs
 
+class CopyPopup(QFrame):
+    """Malý popup toast, který informuje o uložení do schránky."""
+    def __init__(self, parent, text):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setStyleSheet(f"""
+            background-color: {COLORS['accent']};
+            color: white;
+            border-radius: 4px;
+            padding: 8px 15px;
+            font-weight: bold;
+            font-size: 12px;
+        """)
+        layout = QVBoxLayout(self)
+        lbl = QLabel(text)
+        lbl.setStyleSheet("border: none; background: transparent;")
+        layout.addWidget(lbl)
+        self.adjustSize()
+
+class HardwareDetailWidget(QWidget):
+    """
+    Interaktivní widget pro hardware s podporou kopírování do schránky.
+    """
+    def __init__(self, label, value):
+        super().__init__()
+        self.label_text = label
+        self.value_text = value
+        
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        
+        # Výchozí styl
+        self.normal_style = f"""
+            QWidget {{
+                background-color: {COLORS['item_bg']};
+                border-radius: 6px;
+                border-bottom: 2px solid {COLORS['border']};
+            }}
+        """
+        # Styl při najetí (hover) - zvýraznění okraje a mírné zesvětlení
+        self.hover_style = f"""
+            QWidget {{
+                background-color: {COLORS['item_hover']};
+                border-radius: 6px;
+                border-bottom: 2px solid {COLORS['accent']};
+            }}
+        """
+        
+        self.setStyleSheet(self.normal_style)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(5)
+        
+        self.lbl_label = QLabel(label)
+        self.lbl_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; font-weight: bold; text-transform: uppercase; background: transparent; border: none;")
+        
+        self.lbl_val = QLabel(value)
+        self.lbl_val.setWordWrap(True)
+        self.lbl_val.setStyleSheet("color: white; font-size: 16px; font-weight: 500; background: transparent; border: none;")
+        
+        layout.addWidget(self.lbl_label)
+        layout.addWidget(self.lbl_val)
+
+    def enterEvent(self, event):
+        """Animace při najetí myši."""
+        self.setStyleSheet(self.hover_style)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """Návrat do původního stavu."""
+        self.setStyleSheet(self.normal_style)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        """Kopírování do schránky po kliknutí."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(self.value_text)
+            self.show_copy_popup()
+        super().mousePressEvent(event)
+
+    def show_copy_popup(self):
+        """Zobrazí toast popup a po 1.5s ho schová."""
+        self.popup = CopyPopup(self.window(), "Zkopírováno do schránky")
+        
+        # Pozicování nad widgetem
+        global_pos = self.mapToGlobal(QPoint(0, 0))
+        self.popup.move(global_pos.x() + (self.width() // 2) - (self.popup.width() // 2), 
+                        global_pos.y() - 40)
+        
+        self.popup.show()
+        # Automatické smazání po 1500ms
+        QTimer.singleShot(1500, self.popup.close)
+
 # --- WIDGETY ---
 
 class InfoCard(QFrame):
@@ -174,14 +270,79 @@ class InfoCard(QFrame):
         text_layout.addWidget(lbl_value)
         layout.addLayout(text_layout)
 
+class MiniToast(QFrame):
+    """Extrémně malý a minimalistický popup."""
+    def __init__(self, parent, text):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        
+        # Kompaktní styl
+        self.setStyleSheet(f"""
+            background-color: {COLORS['accent']};
+            color: white;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: bold;
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        lbl = QLabel(text)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        self.adjustSize()
+
+class ClickableValueLabel(QLabel):
+    """Speciální Label, který reaguje na myš pouze tehdy, pokud míříte přímo na text."""
+    def __init__(self, text, parent_widget):
+        super().__init__(text)
+        self.parent_widget = parent_widget
+        self.original_text = text
+        
+        # Klíčové nastavení pro zabránění ořezu:
+        # Pevná politika zajistí, že label nebude větší ani menší, než mu určíme
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.setWordWrap(False) # Zakážeme zalamování na více řádků
+        
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        
+        self.update_style(hover=False)
+        
+        # Tato funkce donutí label, aby se roztáhl přesně podle délky textu
+        self.adjustSize()
+
+    def update_style(self, hover=False):
+        color = COLORS['accent'] if hover else "white"
+        decoration = "underline" if hover else "none"
+        self.setStyleSheet(f"""
+            color: {color}; 
+            font-size: 16px; 
+            font-weight: 500; 
+            background: transparent; 
+            border: none;
+            text-decoration: {decoration};
+        """)
+
+    def enterEvent(self, event):
+        self.update_style(hover=True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update_style(hover=False)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            QApplication.clipboard().setText(self.original_text)
+            if hasattr(self.parent_widget, 'show_mini_toast'):
+                self.parent_widget.show_mini_toast()
+        super().mousePressEvent(event)
+
 class HardwareDetailWidget(QWidget):
-    """
-    Detailní widget pro hardware.
-    BEZ IKONY, pouze texty pod sebou.
-    """
     def __init__(self, label, value):
         super().__init__()
-        # Jemné pozadí a rámeček
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {COLORS['item_bg']};
@@ -194,30 +355,27 @@ class HardwareDetailWidget(QWidget):
         layout.setContentsMargins(20, 15, 20, 15)
         layout.setSpacing(5)
         
-        # Nadpis (Typ komponenty) - Menší, barevný
-        lbl_label = QLabel(label)
-        lbl_label.setStyleSheet(f"""
-            color: {COLORS['accent']}; 
-            font-size: 11px; 
-            font-weight: bold; 
-            text-transform: uppercase; 
-            background: transparent; 
-            border: none;
-        """)
+        lbl_type = QLabel(label)
+        lbl_type.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; font-weight: bold; text-transform: uppercase; background: transparent; border: none;")
+        layout.addWidget(lbl_type)
+
+        # Obalíme label do dalšího layoutu, aby se neroztahoval do šířky
+        val_container = QHBoxLayout()
+        val_container.setContentsMargins(0, 0, 0, 0)
         
-        # Hodnota (Název HW) - Větší, bílá
-        lbl_val = QLabel(value)
-        lbl_val.setWordWrap(True)
-        lbl_val.setStyleSheet("""
-            color: white; 
-            font-size: 16px; 
-            font-weight: 500; 
-            background: transparent; 
-            border: none;
-        """)
+        self.lbl_val = ClickableValueLabel(value, self)
+        val_container.addWidget(self.lbl_val)
+        val_container.addStretch() # Toto odtlačí label doleva a zabrání jeho roztahování
         
-        layout.addWidget(lbl_label)
-        layout.addWidget(lbl_val)
+        layout.addLayout(val_container)
+
+    def show_mini_toast(self):
+        """Zobrazení toastu nad kurzorem."""
+        self.toast = MiniToast(self.window(), "Zkopírováno")
+        cursor_pos = QCursor.pos()
+        self.toast.move(cursor_pos.x() - (self.toast.width() // 2), cursor_pos.y() - 35)
+        self.toast.show()
+        QTimer.singleShot(1000, self.toast.close)
 
 # --- HLAVNÍ STRÁNKA SPECIFIKACÍ ---
 
@@ -227,7 +385,7 @@ class SpecsPage(QWidget):
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(40, 40, 40, 40)
-        main_layout.setSpacing(30)
+        main_layout.setSpacing(20)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         # Header
