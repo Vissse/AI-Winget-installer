@@ -25,23 +25,31 @@ from updater import AppUpdater
 
 def resource_path(relative_path):
     """ 
-    Získá absolutní cestu k souboru pro --onedir.
-    Hledá soubory přímo vedle .exe souboru.
+    Univerzální funkce pro získání cesty k souborům.
+    Funguje pro:
+      1. Vývoj (Python skript)
+      2. PyInstaller --onedir (složka)
+      3. PyInstaller --onefile (temp _MEI složka)
     """
     try:
+        # PyInstaller --onefile vytváří temp složku a cestu ukládá do _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        # Pokud nejsme v --onefile
         if getattr(sys, 'frozen', False):
+            # PyInstaller --onedir: exe je vedle souborů
             base_path = os.path.dirname(sys.executable)
         else:
+            # Vývoj: skript je ve složce
             base_path = os.path.abspath(".")
-    except Exception:
-        base_path = os.path.abspath(".")
+            
     return os.path.join(base_path, relative_path)
 
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
 
-# --- OKNO S NÁPOVĚDOU ---
+# --- OKNO S NÁPOVĚDOU (Zůstává stejné) ---
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -295,10 +303,9 @@ class MainWindow(QMainWindow):
         except: pass
 
 if __name__ == "__main__":
-    # 1. Boot Checks (Úklid nepořádku po minulé verzi v Tempu)
-    try:
-        boot_system.cleanup_installer()
-    except Exception: pass
+    # --- 1. BOOT CHECKS (KRITICKÉ PRO UPDATE 6.3) ---
+    # Toto vyčistí prostředí od staré verze, aby nová verze mohla naběhnout
+    boot_system.perform_boot_checks()
 
     app = QApplication(sys.argv)
     
