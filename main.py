@@ -4,7 +4,7 @@ import ctypes
 from ctypes import windll, byref, c_int
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QListWidget, QListWidgetItem, QStackedWidget, QMessageBox, QLabel, 
-                             QPushButton, QDialog, QTextEdit, QFrame)
+                             QPushButton, QDialog, QFrame)
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon
 
@@ -13,7 +13,7 @@ from config import COLORS
 
 # Importy stránek
 from view_home import HomePage
-from view_specs import SpecsPage  # <--- NOVÝ IMPORT
+from view_specs import SpecsPage
 from view_uninstaller import UninstallerPage
 from view_installer import InstallerPage
 from view_settings import SettingsPage
@@ -24,16 +24,17 @@ import boot_system
 from updater import AppUpdater
 
 def resource_path(relative_path):
+    """ Získá absolutní cestu k souboru pro dev i pro PyInstaller exe """
     try:
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        else:
-            base_path = os.path.abspath(".")
+        # PyInstaller vytváří dočasnou složku _MEIPASS
+        base_path = sys._MEIPASS
     except Exception:
+        # Pokud nejsme v exe, jsme v normálním Python skriptu
         base_path = os.path.abspath(".")
+
     return os.path.join(base_path, relative_path)
 
-# (HelpDialog může zůstat stejný, nebo ho zkopírujte z minula)
+# (HelpDialog může zůstat stejný)
 class HelpDialog(QDialog):
     pass 
 
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
             self.setStyleSheet(styles.get_stylesheet())
         except Exception: pass
 
+        # Inicializace updateru (ale nespouštíme ho zde)
         self.updater = AppUpdater(self)
 
         central_widget = QWidget()
@@ -107,21 +109,16 @@ class MainWindow(QMainWindow):
         self.sidebar_list.itemClicked.connect(self.on_sidebar_click)
         
         # --- DEFINICE STRÁNEK V MENU ---
-        # Pořadí v menu (vizuální):
-        
-        # 1. SEKCE: PŘEHLED
         self.add_sidebar_item("🏠  Přehled", target_index=0)
         self.add_sidebar_separator()
         
-        # 2. SEKCE: APLIKACE (Instalace, Update, Uninstall)
         self.add_sidebar_item("📦  Chytrá instalace", target_index=1)
         self.add_sidebar_item("🔄  Aktualizace aplikací", target_index=2)
-        self.add_sidebar_item("🗑️  Odinstalace aplikací", target_index=4) # Pozor: Index 4 ve stacku
+        self.add_sidebar_item("🗑️  Odinstalace aplikací", target_index=4)
         self.add_sidebar_separator()
         
-        # 3. SEKCE: SYSTÉM (Zdraví, Specifikace)
-        self.add_sidebar_item("🩺  Kontrola stavu PC", target_index=3) # Pozor: Index 3 ve stacku
-        self.add_sidebar_item("🖥️  Specifikace PC", target_index=6)    # Nová stránka (Index 6)
+        self.add_sidebar_item("🩺  Kontrola stavu PC", target_index=3)
+        self.add_sidebar_item("🖥️  Specifikace PC", target_index=6)
         
         sidebar_layout.addWidget(self.sidebar_list)
 
@@ -150,19 +147,17 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.pages)
         
         self.home_page = HomePage()
-        self.specs_page = SpecsPage() # Nová instance
+        self.specs_page = SpecsPage()
         
-        # INDEXY VE STACKU (MUSÍ SEDĚT S TARGET_INDEX V MENU):
         self.pages.addWidget(self.home_page)            # Index 0
         self.pages.addWidget(InstallerPage())           # Index 1
         self.pages.addWidget(UpdaterPage())             # Index 2
         self.pages.addWidget(HealthCheckPage())         # Index 3
         try: self.pages.addWidget(UninstallerPage())    # Index 4
         except: self.pages.addWidget(QLabel("Chyba"))
-        self.pages.addWidget(SettingsPage(updater=self.updater)) # Index 5 (Nastavení)
-        self.pages.addWidget(self.specs_page)           # Index 6 (Specifikace)
+        self.pages.addWidget(SettingsPage(updater=self.updater)) # Index 5
+        self.pages.addWidget(self.specs_page)           # Index 6
         
-        # Start
         self.navigate_to_page(0)
 
     # --- METODY ---
@@ -236,12 +231,27 @@ if __name__ == "__main__":
     except Exception: pass
 
     app = QApplication(sys.argv)
+    
+    # 1. Zabraň vypnutí aplikace, když zmizí splash screen a hlavní okno ještě není vidět
+    app.setQuitOnLastWindowClosed(False)
+    
     app.aboutToQuit.connect(lambda: os._exit(0))
     splash = SplashScreen()
     splash.show()
+
     def start_program():
         global window
         window = MainWindow()
-        window.show()
+        
+        # Callback: Zavolá se, pokud není update, nebo ho uživatel zruší
+        def show_app():
+            window.show()
+            # 2. Obnovíme standardní chování (aplikace se ukončí po zavření okna)
+            app.setQuitOnLastWindowClosed(True)
+
+        # Spustíme kontrolu aktualizací na pozadí (silent=True nezobrazí "Jste aktuální")
+        # Pokud update je -> vyskočí dialog. Pokud dá "Update" -> jede update. Pokud "Zrušit" -> volá show_app.
+        window.updater.check_for_updates(silent=True, on_continue=show_app)
+
     splash.finished.connect(start_program)
     app.exec()
