@@ -189,11 +189,14 @@ class UpdateDownloadDialog(QDialog):
 
         self.pbar = QProgressBar()
         self.pbar.setRange(0, 100)
+        self.pbar.setTextVisible(False)  # <--- ZAJISTÍ, ŽE TEXT NEBUDE UVNITŘ BARU
         layout.addWidget(self.pbar)
 
         self.lbl_status = QLabel("0%")
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_status.setStyleSheet(f"color: {COLORS.get('sub_text', '#888')}; font-size: 13px;")
+        
+        # <--- ZMĚNA BARVY ZDE (použito COLORS.get('accent'))
+        self.lbl_status.setStyleSheet(f"color: {COLORS.get('accent', '#0078d4')}; font-size: 14px; font-weight: bold;") 
         layout.addWidget(self.lbl_status)
 
         shadow = QGraphicsDropShadowEffect(self)
