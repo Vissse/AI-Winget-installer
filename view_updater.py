@@ -1,251 +1,290 @@
 import subprocess
 import re
+import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QListWidget, QListWidgetItem, 
-                             QProgressBar, QTextEdit, QFrame)
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
-
+                             QProgressBar, QFrame, QLineEdit, QFileIconProvider)
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QFileInfo
+from PyQt6.QtGui import QIcon
 from config import COLORS
+from view_installer import HoverButton, IconWorker
 
-# --- 1. WORKER PRO SKENOVÁNÍ ---
+# --- 1. WORKERY (Zůstávají stejné) ---
 class ScanWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
-
+    
     def run(self):
         try:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             cmd = "winget upgrade --include-unknown --accept-source-agreements"
-            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='utf-8', errors='replace')
-            lines = result.stdout.split('\n')
+            res = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='utf-8', errors='replace')
             updates = []
-            start_parsing = False
-            for line in lines:
-                if line.startswith("Name") and "Id" in line:
-                    start_parsing = True
+            parsing = False
+            for line in res.stdout.split('\n'):
+                if "Name" in line and "Id" in line: 
+                    parsing = True
                     continue
-                if not start_parsing or "----" in line or not line.strip(): 
+                if not parsing or "----" in line or not line.strip(): 
                     continue
-                parts = re.split(r'\s{2,}', line.strip())
-                if len(parts) >= 4:
-                    updates.append({'name': parts[0], 'id': parts[1], 'current_ver': parts[2], 'new_ver': parts[3]})
+                p = re.split(r'\s{2,}', line.strip())
+                if len(p) >= 4: 
+                    updates.append({'name': p[0], 'id': p[1], 'current': p[2], 'new': p[3]})
             self.finished.emit(updates)
-        except Exception as e:
+        except Exception as e: 
             self.error.emit(str(e))
 
-# --- 2. WORKER PRO AKTUALIZACI ---
 class UpdateWorker(QThread):
-    log_signal = pyqtSignal(str)
     finished = pyqtSignal()
-
     def __init__(self, app_id=None, update_all=False):
         super().__init__()
         self.app_id = app_id
         self.update_all = update_all
 
     def run(self):
-        cmd = "winget upgrade --all --include-unknown --accept-package-agreements --accept-source-agreements" if self.update_all else \
-              f'winget upgrade --id "{self.app_id}" --include-unknown --accept-package-agreements --accept-source-agreements'
-        try:
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, text=True, encoding='utf-8', errors='replace', startupinfo=startupinfo)
-            for line in process.stdout:
-                self.log_signal.emit(line.strip())
-            process.wait()
-            self.log_signal.emit("\nHotovo.")
-        except Exception as e:
-            self.log_signal.emit(f"\nChyba: {str(e)}")
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        cmd = "winget upgrade --all --include-unknown --accept-package-agreements --accept-source-agreements" if self.update_all else f"winget upgrade --id {self.app_id} --exact --accept-package-agreements --accept-source-agreements"
+        subprocess.run(cmd, shell=False, startupinfo=startupinfo)
         self.finished.emit()
 
-# --- 3. WIDGET PRO ŘÁDEK AKTUALIZACE (BEZ IKONEK) ---
+# --- 2. UI KOMPONENTY ---
 class UpdateRowWidget(QWidget):
-    def __init__(self, data, parent_view):
+    def __init__(self, data, parent_page):
         super().__init__()
         self.data = data
-        self.parent_view = parent_view
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(25, 12, 25, 12)
-        layout.setSpacing(0)
-        
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
-        name_lbl = QLabel(data['name'])
-        name_lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: white; background: transparent;")
-        ver_lbl = QLabel(f"{data['current_ver']}  ➜  {data['new_ver']}")
-        ver_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-size: 12px; background: transparent;")
-        info_layout.addWidget(name_lbl)
-        info_layout.addWidget(ver_lbl)
-        layout.addLayout(info_layout)
-        layout.addStretch()
-        
-        btn_update = QPushButton("Aktualizovat")
-        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_update.setFixedSize(110, 32)
-        btn_update.setStyleSheet(f"""
-            QPushButton {{ 
-                background-color: rgba(255, 255, 255, 0.05); 
-                color: {COLORS['accent']}; 
-                border: 1px solid {COLORS['border']}; 
-                border-radius: 6px; 
-                font-size: 12px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ 
-                background-color: {COLORS['accent']}; 
-                color: white; 
-                border: 1px solid {COLORS['accent']};
-            }}
-        """)
-        btn_update.clicked.connect(lambda: self.parent_view.run_update(self.data['id'], self.data['name']))
-        layout.addWidget(btn_update)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(15)
 
-# --- 4. HLAVNÍ UI (UpdaterPage) ---
+        # 1. Ikona (Offline systémová)
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setFixedSize(24, 24)
+        
+        # Získání systémové ikony
+        self.set_offline_icon(data['name'], data['id'])
+        
+        layout.addWidget(self.icon_lbl)
+
+        # 2. Název (Dynamický stretch)
+        name_lbl = QLabel(data['name'])
+        name_lbl.setStyleSheet("font-weight: bold; color: white;")
+        name_lbl.setWordWrap(False) # Zabráníme roztažení řádku do výšky
+        layout.addWidget(name_lbl, stretch=1)
+
+        # 3. Stávající verze (FIXNÍ ŠÍŘKA 150px)
+        curr_lbl = QLabel(data['current'])
+        curr_lbl.setFixedWidth(150)
+        curr_lbl.setStyleSheet(f"color: {COLORS['sub_text']};")
+        layout.addWidget(curr_lbl)
+
+        # 4. Dostupná verze (FIXNÍ ŠÍŘKA 150px)
+        new_lbl = QLabel(data['new'])
+        new_lbl.setFixedWidth(150)
+        new_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold;")
+        layout.addWidget(new_lbl)
+
+        # 5. Akce (FIXNÍ ŠÍŘKA 110px)
+        self.btn_up = QPushButton("Aktualizovat")
+        self.btn_up.setFixedWidth(110)
+        self.btn_up.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_up.setStyleSheet(f"QPushButton {{ background: transparent; color: {COLORS['accent']}; font-weight: bold; border: 1px solid {COLORS['accent']}; border-radius: 4px; padding: 4px; }} QPushButton:hover {{ background: {COLORS['accent']}; color: white; }}")
+        self.btn_up.clicked.connect(lambda: self.parent_page.run_update(data['id'], data['name']))
+        layout.addWidget(self.btn_up)
+
+    def set_offline_icon(self, name, app_id):
+        icon_provider = QFileIconProvider()
+        
+        # Zkusíme najít cestu k aplikaci (běžné lokace)
+        search_paths = [
+            f"C:\\Program Files\\{name}",
+            f"C:\\Program Files (x86)\\{name}",
+            f"C:\\Program Files\\{app_id.split('.')[0]}"
+        ]
+        
+        found_icon = False
+        for path in search_paths:
+            if os.path.exists(path):
+                icon = icon_provider.icon(QFileInfo(path))
+                if not icon.isNull():
+                    pixmap = icon.pixmap(24, 24)
+                    self.icon_lbl.setPixmap(pixmap)
+                    found_icon = True
+                    break
+        
+        if not found_icon:
+            # Fallback na systémovou ikonu "Aplikace" (.exe)
+            self.icon_lbl.setText("📦")
+            self.icon_lbl.setStyleSheet("font-size: 11pt; color: #555;")
+
 class UpdaterPage(QWidget):
+    scan_finished_signal = pyqtSignal(list)
+
     def __init__(self):
         super().__init__()
+        self.all_updates = [] # Cache pro vyhledávání
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(40, 40, 40, 40)
-        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        header = QHBoxLayout()
-        title_box = QVBoxLayout()
-        lbl_title = QLabel("Aktualizace aplikací")
-        lbl_title.setStyleSheet("font-size: 24px; font-weight: bold; color: white;")
-        lbl_sub = QLabel("Skenování a správa verzí softwaru")
-        lbl_sub.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 13px;")
-        title_box.addWidget(lbl_title)
-        title_box.addWidget(lbl_sub)
-        header.addLayout(title_box)
-        header.addStretch()
-
-        self.btn_refresh = QPushButton("Skenovat dostupné aktualizace")
-        self._style_btn(self.btn_refresh, COLORS['input_bg'], "white")
-        self.btn_refresh.clicked.connect(self.scan_updates)
-        header.addWidget(self.btn_refresh)
+        # === A. HORNÍ VYHLEDÁVACÍ LIŠTA (Sjednoceno s Installerem) ===
+        top_bar = QWidget()
+        top_bar.setStyleSheet(f"background-color: {COLORS['bg_main']}; border-bottom: 1px solid {COLORS['border']};")
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(20, 15, 20, 15)
         
-        self.btn_update_all = QPushButton("Aktualizovat vše")
-        self._style_btn(self.btn_update_all, COLORS['accent'], "white")
-        self.btn_update_all.clicked.connect(self.run_update_all)
-        self.btn_update_all.setEnabled(False)
-        header.addWidget(self.btn_update_all)
-        main_layout.addLayout(header)
+        lbl_title = QLabel("Aktualizace")
+        lbl_title.setStyleSheet("font-size: 14pt; font-weight: bold; color: white; border: none;")
+        top_layout.addWidget(lbl_title)
+        top_layout.addSpacing(20)
 
-        # SEZNAM S VIDITELNÝM MODERNÍM SLIDEREM
-        self.list_widget = QListWidget()
-        self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        self.list_widget.setStyleSheet(self._get_scroll_style())
-        main_layout.addWidget(self.list_widget, stretch=3)
+        # Vyhledávací kontejner
+        self.search_container = QFrame()
+        self.search_container.setFixedWidth(500)
+        self.search_container.setFixedHeight(38)
+        self.search_container.setStyleSheet(f"QFrame {{ background-color: {COLORS['input_bg']}; border: 1px solid {COLORS['border']}; border-radius: 6px; }} QFrame:focus-within {{ border: 1px solid {COLORS['accent']}; }}")
+        search_cont_layout = QHBoxLayout(self.search_container)
+        search_cont_layout.setContentsMargins(10, 0, 5, 0)
 
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Hledat v aktualizacích...")
+        self.search_input.setStyleSheet("border: none; background: transparent; color: white; font-size: 10pt;")
+        self.search_input.textChanged.connect(self.filter_updates)
+        
+        self.btn_search_icon = HoverButton("", "images/magnifying-glass-thin.png", "fg")
+        self.btn_search_icon.setFixedSize(32, 32)
+        self.btn_search_icon.setIconSize(QSize(18, 18))
+
+        search_cont_layout.addWidget(self.search_input)
+        search_cont_layout.addWidget(self.btn_search_icon)
+        top_layout.addWidget(self.search_container)
+        
+        top_layout.addStretch()
+        main_layout.addWidget(top_bar)
+
+        # Progress bar
         self.progress = QProgressBar()
-        self.progress.setStyleSheet(f"QProgressBar {{ min-height: 2px; max-height: 2px; background: transparent; border: none; }} QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}")
+        self.progress.setFixedHeight(2)
         self.progress.setTextVisible(False)
-        self.progress.setRange(0, 0)
+        self.progress.setStyleSheet(f"QProgressBar {{ border: none; background: transparent; }} QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}")
         self.progress.hide()
         main_layout.addWidget(self.progress)
 
-        # LOG KONZOLE S MODERNÍM SLIDEREM
-        self.console = QTextEdit()
-        self.console.setReadOnly(True)
-        self.console.setPlaceholderText("Průběh aktualizace se zobrazí zde...")
-        self.console.setStyleSheet(self._get_scroll_style(is_console=True))
-        main_layout.addWidget(self.console, stretch=1)
+        # === B. ACTION BAR ===
+        action_bar = QWidget()
+        action_bar.setStyleSheet(f"background-color: {COLORS['bg_main']};")
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(20, 10, 20, 10)
 
-    def _get_scroll_style(self, is_console=False):
-        bg = "rgba(0, 0, 0, 0.2)" if is_console else COLORS['bg_sidebar']
-        radius = "8px"
-        padding = "10px" if is_console else "0px"
-        return f"""
-            { 'QTextEdit' if is_console else 'QListWidget' } {{ 
-                background-color: {bg}; 
-                border: 1px solid {COLORS['border']}; 
-                border-radius: {radius}; 
-                outline: none;
-                padding: {padding};
-                color: { '#888' if is_console else 'white' };
-                font-family: { "'Consolas', monospace" if is_console else "'Segoe UI'" };
-                font-size: { "11px" if is_console else "14px" };
-            }}
-            QScrollBar:vertical {{
-                border: none;
-                background: rgba(0,0,0,0.1);
-                width: 8px;
-                margin: 2px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: #444;
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {COLORS['accent']};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                height: 0px; background: none;
-            }}
-        """
+        self.btn_refresh = QPushButton("  Skenovat")
+        self.btn_refresh.setIcon(QIcon("images/arrows-clockwise-thin.png"))
+        self.btn_refresh.setFixedHeight(34)
+        self.btn_refresh.setStyleSheet(f"QPushButton {{ background-color: {COLORS['item_bg']}; color: white; border: 1px solid {COLORS['border']}; padding: 0 15px; border-radius: 6px; font-weight: bold; }} QPushButton:hover {{ border-color: {COLORS['accent']}; }}")
+        self.btn_refresh.clicked.connect(self.scan_updates)
+        action_layout.addWidget(self.btn_refresh)
+        
+        self.btn_update_all = QPushButton("  Aktualizovat vše")
+        self.btn_update_all.setFixedHeight(34)
+        self.btn_update_all.setEnabled(False)
+        self.btn_update_all.setStyleSheet(f"QPushButton {{ background-color: {COLORS['accent']}; color: white; border: none; padding: 0 15px; border-radius: 6px; font-weight: bold; }} QPushButton:disabled {{ background-color: #222; color: #555; }}")
+        self.btn_update_all.clicked.connect(self.run_update_all)
+        action_layout.addWidget(self.btn_update_all)
+        
+        action_layout.addStretch()
+        self.status_lbl = QLabel("Připraveno")
+        self.status_lbl.setStyleSheet(f"color: {COLORS['sub_text']};")
+        action_layout.addWidget(self.status_lbl)
+        main_layout.addWidget(action_bar)
 
-    def _style_btn(self, btn, bg, fg):
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFixedHeight(36)
-        btn.setStyleSheet(f"QPushButton {{ background-color: {bg}; color: {fg}; border: none; padding: 0px 20px; border-radius: 6px; font-weight: bold; font-size: 13px; }} QPushButton:hover {{ background-color: {COLORS['accent_hover'] if bg == COLORS['accent'] else '#333'}; }} QPushButton:disabled {{ background-color: #222; color: #555; }}")
+        # === C. HLAVIČKA TABULKY (S FIXNÍMI ŠÍŘKAMI) ===
+        header_widget = QWidget()
+        header_widget.setStyleSheet(f"background-color: {COLORS['bg_sidebar']}; border: none; font-size: 9pt;")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(35, 8, 35, 8) 
+        header_layout.setSpacing(15)
+
+        # Definice šířek (musí sedět s UpdateRowWidget)
+        h_headers = [
+            ("", 24, 0), 
+            ("NÁZEV APLIKACE", 0, 1), 
+            ("STÁVAJÍCÍ", 150, 0), 
+            ("DOSTUPNÁ", 150, 0), 
+            ("AKCE", 110, 0)
+        ]
+        
+        for text, width, stretch in h_headers:
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font-weight: bold; color: white;")
+            if width > 0: lbl.setFixedWidth(width)
+            header_layout.addWidget(lbl, stretch=stretch)
+            
+        main_layout.addWidget(header_widget)
+
+        # === D. SEZNAM ===
+        self.list_widget = QListWidget()
+        self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list_widget.setStyleSheet(f"QListWidget {{ background-color: {COLORS['bg_main']}; border: none; padding: 0 30px; }} QListWidget::item {{ border-bottom: 1px solid {COLORS['border']}; }} QListWidget::item:hover {{ background-color: {COLORS['item_hover']}; }}")
+        # Minimalistický scroller
+        self.list_widget.verticalScrollBar().setStyleSheet(f"QScrollBar:vertical {{ border: none; background: transparent; width: 4px; }} QScrollBar::handle:vertical {{ background: #333; border-radius: 2px; }} QScrollBar::handle:vertical:hover {{ background: {COLORS['accent']}; }}")
+        main_layout.addWidget(self.list_widget)
 
     def scan_updates(self):
         self.list_widget.clear()
-        self.console.clear()
+        self.all_updates = []
         self.btn_refresh.setEnabled(False)
-        self.btn_update_all.setEnabled(False)
+        self.status_lbl.setText("Hledám aktualizace...")
+        self.progress.setRange(0, 0)
         self.progress.show()
-        self.console.append("Hledám aktualizace...")
+        
         self.scan_worker = ScanWorker()
         self.scan_worker.finished.connect(self.on_scan_finished)
-        self.scan_worker.error.connect(lambda e: self.console.append(f"Chyba: {e}"))
+        self.scan_worker.error.connect(lambda e: self.on_scan_finished([]))
         self.scan_worker.start()
 
     def on_scan_finished(self, updates):
         self.progress.hide()
         self.btn_refresh.setEnabled(True)
-        if not updates:
-            self.console.append("Všechny aplikace jsou aktuální.")
-            return
-        self.btn_update_all.setEnabled(True)
-        self.btn_update_all.setText(f"Aktualizovat vše ({len(updates)})")
-        for up in updates:
-            item = QListWidgetItem(self.list_widget)
-            item.setSizeHint(QSize(0, 65))
-            self.list_widget.setItemWidget(item, UpdateRowWidget(up, self))
+        self.all_updates = updates
+        self.scan_finished_signal.emit(updates)
+        self.render_list(updates)
 
-    def run_update(self, app_id, app_name):
-        self._prepare_update_ui()
-        self.console.append(f"Spouštím aktualizaci: {app_name}...")
-        self.up_worker = UpdateWorker(app_id=app_id, update_all=False)
-        self.up_worker.log_signal.connect(self.append_log)
-        self.up_worker.finished.connect(self.on_update_finished)
+    def render_list(self, updates):
+        self.list_widget.clear()
+        if updates: 
+            self.btn_update_all.setEnabled(True)
+            self.btn_update_all.setText(f"  Aktualizovat vše ({len(updates)})")
+            self.status_lbl.setText(f"Nalezeno {len(updates)} aktualizací")
+        else:
+            self.btn_update_all.setEnabled(False)
+            self.status_lbl.setText("Vše je aktuální")
+            self.show_empty_message()
+            
+        for u in updates:
+            item = QListWidgetItem(self.list_widget)
+            item.setSizeHint(QSize(0, 50))
+            self.list_widget.setItemWidget(item, UpdateRowWidget(u, self))
+
+    def filter_updates(self, text):
+        filtered = [u for u in self.all_updates if text.lower() in u['name'].lower() or text.lower() in u['id'].lower()]
+        self.render_list(filtered)
+
+    def show_empty_message(self):
+        item = QListWidgetItem(self.list_widget)
+        lbl = QLabel("Všechny aplikace jsou aktuální ✨")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("color: #666; padding: 40px; font-size: 10pt;")
+        item.setSizeHint(QSize(0, 120))
+        self.list_widget.setItemWidget(item, lbl)
+
+    def run_update(self, aid, name):
+        self.status_lbl.setText(f"Aktualizuji {name}...")
+        self.up_worker = UpdateWorker(app_id=aid)
+        self.up_worker.finished.connect(self.scan_updates)
         self.up_worker.start()
 
     def run_update_all(self):
-        self._prepare_update_ui()
-        self.console.append("Spouštím hromadnou aktualizaci...")
+        self.status_lbl.setText("Aktualizuji vše...")
         self.up_worker = UpdateWorker(update_all=True)
-        self.up_worker.log_signal.connect(self.append_log)
-        self.up_worker.finished.connect(self.on_update_finished)
+        self.up_worker.finished.connect(self.scan_updates)
         self.up_worker.start()
-
-    def _prepare_update_ui(self):
-        self.progress.show()
-        self.btn_refresh.setEnabled(False)
-        self.btn_update_all.setEnabled(False)
-        self.list_widget.setEnabled(False)
-
-    def append_log(self, text):
-        self.console.append(text)
-        self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
-
-    def on_update_finished(self):
-        self.progress.hide()
-        self.list_widget.setEnabled(True)
-        self.btn_refresh.setEnabled(True)
-        self.scan_updates()

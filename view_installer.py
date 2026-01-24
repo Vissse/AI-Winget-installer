@@ -3,19 +3,18 @@ import re
 import subprocess
 import os
 import requests
-import webbrowser
 import difflib
 from urllib.parse import urlparse
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QListWidget, QListWidgetItem, QLineEdit, 
-                             QProgressBar, QMessageBox, QFileDialog, QToolTip)
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QEvent, QObject
-from PyQt6.QtGui import QIcon, QColor, QFont, QCursor, QPixmap, QImage
+                             QProgressBar, QMessageBox, QMenu, QCheckBox, QFrame,
+                             QDialog, QTabWidget, QComboBox, QFileDialog, QDialogButtonBox)
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QImage, QPainter, QColor
 
-from config import COLORS, OUTPUT_FILE
+from config import COLORS
 from settings_manager import SettingsManager
 from google import genai 
-from install_manager import InstallationDialog
 
 # Import presetu
 try:
@@ -23,52 +22,57 @@ try:
 except ImportError:
     PRESETS = {}
 
-# --- 0. POMOCNÉ TŘÍDY ---
+# --- TŘÍDA PRO TLAČÍTKA S DYNAMICKÝM PŘEBARVENÍM IKONY ---
 
-class InstantTooltip(QObject):
-    def eventFilter(self, widget, event):
-        if event.type() == QEvent.Type.ToolTip:
-            if widget.toolTip():
-                QToolTip.showText(QCursor.pos(), widget.toolTip())
-            return True 
-        return False
+class HoverButton(QPushButton):
+    """Tlačítko, které při najetí myší softwarově přebarví ikonku i text."""
+    def __init__(self, text, icon_path, style_template, parent=None):
+        super().__init__(text, parent)
+        self.icon_path = icon_path
+        self.style_template = style_template
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.set_colored_icon(False)
 
-import json
-import re
-import subprocess
-import os
-import requests
-import webbrowser
-from urllib.parse import urlparse
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QListWidget, QListWidgetItem, QLineEdit, 
-                             QProgressBar, QMessageBox, QFileDialog, QToolTip)
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QEvent, QObject
-from PyQt6.QtGui import QIcon, QColor, QFont, QCursor, QPixmap, QImage
+    def set_colored_icon(self, is_hover):
+        if not os.path.exists(self.icon_path):
+            return
 
-from config import COLORS, OUTPUT_FILE
-from settings_manager import SettingsManager
-from google import genai 
+        pixmap = QPixmap(self.icon_path)
+        current_color = QColor(COLORS['accent']) if is_hover else QColor(
+            COLORS['sub_text'] if "sub_text" in self.style_template else COLORS['fg']
+        )
 
-try:
-    from presets import PRESETS
-except ImportError:
-    PRESETS = {}
+        colored_pixmap = QPixmap(pixmap.size())
+        colored_pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(colored_pixmap)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(colored_pixmap.rect(), current_color)
+        painter.end()
 
-# --- 0. POMOCNÉ TŘÍDY ---
+        self.setIcon(QIcon(colored_pixmap))
+        
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; outline: none;
+                color: {current_color.name()}; font-weight: bold; font-size: 10pt;
+                padding: 5px; text-align: left;
+            }}
+        """)
 
-class InstantTooltip(QObject):
-    def eventFilter(self, widget, event):
-        if event.type() == QEvent.Type.ToolTip:
-            if widget.toolTip():
-                QToolTip.showText(QCursor.pos(), widget.toolTip())
-            return True 
-        return False
+    def enterEvent(self, event):
+        self.set_colored_icon(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.set_colored_icon(False)
+        super().leaveEvent(event)
+
+# --- POMOCNÉ TŘÍDY (WORKERS) ---
 
 class IconWorker(QThread):
     loaded = pyqtSignal(QPixmap)
 
-    # PŘIDÁN PARAMETR: preset_url=None
     def __init__(self, app_id, website=None, preset_url=None):
         super().__init__()
         self.app_id = app_id
@@ -77,862 +81,609 @@ class IconWorker(QThread):
 
     def get_domain(self, url):
         try:
+            if not url.startswith("http"):
+                url = "https://" + url
             return urlparse(url).netloc
         except:
             return ""
 
     def run(self):
-        # 1. PRIORITA: Pokud máme ikonku přímo v presetu, použijeme ji!
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
-
         if self.preset_url:
-            try:
-                response = session.get(self.preset_url, timeout=3)
-                if response.status_code == 200:
-                    image = QImage()
-                    image.loadFromData(response.content)
-                    if not image.isNull():
-                        pixmap = QPixmap.fromImage(image)
-                        pixmap = pixmap.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        self.loaded.emit(pixmap)
-                        return # Hotovo, končíme
-            except:
-                pass # Pokud selže preset, pokračujeme dál
+            if self._try_load_url(self.preset_url): return
 
-        if not self.app_id: return
+        if self.app_id:
+            clean_id = self.app_id
+            lower_id = self.app_id.lower()
+            dashed_id = lower_id.replace(".", "-")
+            
+            base_dash = "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png"
+            if self._try_load_url(f"{base_dash}/{dashed_id}.png"): return
+            if self._try_load_url(f"{base_dash}/{lower_id}.png"): return
+            
+            base_uniget = "https://raw.githubusercontent.com/marticliment/UnigetUI/main/src/UnigetUI.PackageEngine/Assets/Packages"
+            if self._try_load_url(f"{base_uniget}/{clean_id}.png"): return
+            if self._try_load_url(f"{base_uniget}/{lower_id}.png"): return
 
-        # ... (zbytek metody run zůstává stejný: Winget API, GitHub, Favicons) ...
-        urls_to_try = []
-        
-        # --- 1. ZLATÝ STANDARD: WINGET.RUN API ---
-        # ... kód pokračuje ...
-
-        # --- 1. ZLATÝ STANDARD: WINGET.RUN API ---
-        # Toto je nejspolehlivější metoda. API nám vrátí přesnou URL ikony definovanou v manifestu.
-        try:
-            api_url = f"https://api.winget.run/v2/packages/{self.app_id}"
-            # Voláme API (krátký timeout, ať neblokujeme, pokud server neodpovídá)
-            api_resp = session.get(api_url, timeout=2.5)
-            if api_resp.status_code == 200:
-                data = api_resp.json()
-                # Cesta k ikoně v JSONu
-                icon_url = data.get("Package", {}).get("Latest", {}).get("IconUrl")
-                if icon_url:
-                    urls_to_try.append(icon_url)
-        except:
-            pass
-
-        # --- 2. PŘÍPRAVA ID VARIANT PRO REPOZITÁŘE ---
-        clean_id = self.app_id
-        lower_id = self.app_id.lower()
-        # Pokud ID obsahuje tečky, zkusíme variantu s pomlčkami (časté u dashboard-icons)
-        dashed_id = lower_id.replace(".", "-")
-        
-        # Zkrácené ID (např. 'krita' z 'KDE.Krita')
-        short_id = self.app_id.split(".")[-1] if "." in self.app_id else self.app_id
-        short_lower = short_id.lower()
-
-        # --- 3. GITHUB REPOZITÁŘE (FALLBACK) ---
-        
-        # A) UnigetUI (Dříve WingetUI) - Velká databáze
-        base_uniget = "https://raw.githubusercontent.com/marticliment/UnigetUI/main/src/UnigetUI.PackageEngine/Assets/Packages"
-        urls_to_try.append(f"{base_uniget}/{clean_id}.png")
-        urls_to_try.append(f"{base_uniget}/{lower_id}.png")
-        urls_to_try.append(f"{base_uniget}/{short_id}.png")
-
-        # B) Dashboard Icons (Walkxcode) - Kvalitní loga, často používají pomlčky místo teček
-        base_dash = "https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png"
-        urls_to_try.append(f"{base_dash}/{dashed_id}.png")      # např. google-chrome.png
-        urls_to_try.append(f"{base_dash}/{lower_id}.png")       # např. discord.discord.png
-        urls_to_try.append(f"{base_dash}/{short_lower}.png")    # např. krita.png
-
-        # --- 4. WEBOVÉ FAVICONY (POSLEDNÍ ZÁCHRANA) ---
-        if self.website and "http" in self.website:
+        if self.website:
             domain = self.get_domain(self.website)
             if domain:
-                # DuckDuckGo (často najde i to, co Google ne)
-                urls_to_try.append(f"https://icons.duckduckgo.com/ip3/{domain}.ico")
-                # Google
-                urls_to_try.append(f"https://www.google.com/s2/favicons?domain={domain}&sz=64")
+                if self._try_load_url(f"https://icons.duckduckgo.com/ip3/{domain}.ico"): return
+                if self._try_load_url(f"https://www.google.com/s2/favicons?domain={domain}&sz=64"): return
 
-        # --- 5. STAHOVÁNÍ ---
-        for url in urls_to_try:
-            try:
-                response = session.get(url, timeout=1.5)
-                
-                # Kontrola, zda jsme dostali validní obrázek (ne 404 stránku nebo prázdný soubor)
-                if response.status_code == 200 and len(response.content) > 100:
+    def _try_load_url(self, url):
+        try:
+            session = requests.Session()
+            session.headers.update({'User-Agent': 'Mozilla/5.0'})
+            response = session.get(url, timeout=1.5, stream=True)
+            if response.status_code == 200:
+                data = response.content
+                if len(data) > 50:
                     image = QImage()
-                    image.loadFromData(response.content)
-                    
+                    image.loadFromData(data)
                     if not image.isNull():
-                        # Převedeme na Pixmap a zmenšíme kvalitně na 32x32
                         pixmap = QPixmap.fromImage(image)
                         pixmap = pixmap.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                         self.loaded.emit(pixmap)
-                        return # MÁME IKONU, KONEC
-            except:
-                continue
+                        return True
+        except Exception:
+            pass
+        return False
 
-# --- 1. MOZEK VYHLEDÁVÁNÍ (SearchWorker) ---
 class SearchWorker(QThread):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, query):
+    def __init__(self, query, use_smart_search=True):
         super().__init__()
         self.query = query
+        self.use_smart_search = use_smart_search
 
     def run(self):
-        settings = SettingsManager.load_settings()
-        api_key = settings.get("api_key", "")
-        
-        # Načtení klíčů presetů pro matchování
+        if not self.use_smart_search:
+            try:
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                cmd = f'winget search "{self.query}" --accept-source-agreements'
+                result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
+                
+                lines = result.stdout.split('\n')
+                data = []
+                header_found = False
+                
+                for line in lines:
+                    if "Name" in line and "Id" in line:
+                        header_found = True
+                        continue
+                    if not header_found or "---" in line or not line.strip():
+                        continue
+                        
+                    parts = re.split(r'\s{2,}', line.strip())
+                    if len(parts) >= 2:
+                        name = parts[0]
+                        app_id = parts[1]
+                        version = parts[2] if len(parts) > 2 else "Unknown"
+                        
+                        data.append({
+                            "name": name,
+                            "id": app_id,
+                            "version": version,
+                            "website": "" 
+                        })
+                
+                self.finished.emit(data)
+                return
+            except Exception as e:
+                self.error.emit(f"Chyba Winget hledání: {str(e)}")
+                return
+
+        try:
+            settings = SettingsManager.load_settings()
+            api_key = settings.get("api_key", "")
+        except Exception:
+            self.error.emit("Nepodařilo se načíst nastavení.")
+            return
+
         preset_keys = list(PRESETS.keys())
         query_lower = self.query.lower().strip()
         matched_preset_key = None
 
-        # =================================================================
-        # KROK 1: HEURISTIKA & FUZZY MATCHING (Lokální, 0ms)
-        # =================================================================
-        # Řeší překlepy: "progfozieč" -> "prohlížeč"
-        
-        # A) Přímá shoda
         if query_lower in preset_keys:
             matched_preset_key = query_lower
-            
-        # B) Fuzzy shoda (Levenshtein distance)
-        # cutoff=0.6 znamená, že slovo musí být alespoň z 60 % podobné
         if not matched_preset_key:
-            matches = difflib.get_close_matches(query_lower, preset_keys, n=1, cutoff=0.6)
-            if matches:
+            candidates = [k for k in preset_keys if k.startswith(query_lower)]
+            if len(candidates) == 1:
+                matched_preset_key = candidates[0]
+        if not matched_preset_key:
+            matches = difflib.get_close_matches(query_lower, preset_keys, n=1, cutoff=0.8)
+            if matches and abs(len(query_lower) - len(matches[0])) <= 3:
                 matched_preset_key = matches[0]
-                print(f"[LOG] Fuzzy match nalezen: '{self.query}' -> '{matched_preset_key}'")
 
-        # =================================================================
-        # KROK 2: AI SEMANTICKÁ KLASIFIKACE (Cloud, ~500ms)
-        # =================================================================
-        # Řeší význam: "surfovat na webu" -> "prohlížeč"
-        
-        if not matched_preset_key and api_key:
-            try:
-                client = genai.Client(api_key=api_key)
-                
-                # Zjednodušený prompt pro klasifikaci
-                classification_prompt = f"""
-                Mám definované kategorie softwaru (PRESETS): {json.dumps(preset_keys)}.
-                Uživatel hledá: "{self.query}".
-                
-                ÚKOL:
-                Pokud záměr uživatele silně odpovídá některé z kategorií (např. 'surfovat' -> 'prohlížeč', 'psát dokumenty' -> 'office'), vrať POUZE název té kategorie.
-                Pokud to neodpovídá žádnému presetu, vrať řetězec "NULL".
-                
-                Odpověz pouze jedním slovem (klíčem nebo NULL).
-                """
-                
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash", 
-                    contents=classification_prompt
-                )
-                
-                ai_suggestion = response.text.strip().replace('"', '').replace("'", "")
-                
-                if ai_suggestion in preset_keys:
-                    matched_preset_key = ai_suggestion
-                    print(f"[LOG] AI Preset match: '{self.query}' -> '{matched_preset_key}'")
-
-            except Exception as e:
-                print(f"[WARN] AI Classification failed: {e}")
-                # Pokračujeme dál, nekončíme chybou
-
-        # =================================================================
-        # KROK 3: VYZVEDNUTÍ DAT Z PRESETS (Pokud nalezeno v K1 nebo K2)
-        # =================================================================
-        
         if matched_preset_key:
             data = PRESETS[matched_preset_key]
-            
-            # Rekurzivní alias handling (např. "browser" -> "prohlížeč")
-            while isinstance(data, str):
-                data = PRESETS.get(data, [])
-
+            while isinstance(data, str): data = PRESETS.get(data, [])
             if isinstance(data, list) and len(data) > 0:
-                # Doplnění verze u statických presetů
                 for item in data:
-                    if 'version' not in item:
-                        item['version'] = "Latest (Preset)"
-                
+                    if 'version' not in item: item['version'] = "Latest (Preset)"
                 self.finished.emit(data)
                 return 
 
-        # =================================================================
-        # KROK 4: WINGET SEARCH (Fallback pro specifické aplikace)
-        # =================================================================
-        # Pokud jsme doteď nenašli shodu, znamená to, že uživatel hledá
-        # něco specifického, co není v presetech (např. "Blender").
-        
         if not api_key:
-            self.error.emit("Chybí API klíč a shoda v presetech nebyla nalezena.")
+            self.error.emit("Nenalezeno v presetech a chybí API klíč.")
             return
 
+        try:
+            client = genai.Client(api_key=api_key)
+        except Exception as e:
+            self.error.emit(f"Chyba inicializace AI: {str(e)}")
+            return
+
+        intent_prompt = f"""
+        Jsi expert na Windows software a Winget repozitář.
+        Uživatel zadal: "{self.query}"
+        Pokud hledá konkrétní app, vrať jen opravený název.
+        Pokud hledá kategorii, vrať seznam nejlepších aplikací.
+        Odpověz POUZE ve formátu: QUERIES: app1;app2;app3
+        """
         search_terms = []
         try:
-            intent_prompt = f"""
-            Jsi expert na Windows software. Uživatel hledá: "{self.query}"
-            Vrať seznam přesných názvů pro 'winget search'.
-            Odpověz POUZE ve formátu: QUERIES: app1;app2
-            """
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=intent_prompt)
-            
-            if response.text and "QUERIES:" in response.text:
-                clean_line = response.text.replace("QUERIES:", "").strip()
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=intent_prompt)
+            raw_intent = response.text.strip()
+            if "QUERIES:" in raw_intent:
+                clean_line = raw_intent.replace("QUERIES:", "").strip()
                 search_terms = [t.strip() for t in clean_line.split(";") if t.strip()]
             else:
                 search_terms = [self.query]
-        except Exception as e:
+        except Exception:
             search_terms = [self.query]
 
-        # --- WINGET EXECUTION ---
         combined_output = ""
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
         for term in search_terms:
             try:
                 cmd = f'winget search "{term}" --source winget --accept-source-agreements -n 3'
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, encoding='cp852', errors='replace')
-                combined_output += result.stdout
-            except Exception as e:
-                print(f"Chyba hledání '{term}': {e}")
+                combined_output += f"\n--- VÝSLEDKY PRO '{term}' ---\n" + result.stdout
+            except Exception: pass
 
-        # --- AI PARSING & FILTERING ---
+        filter_prompt = f"""
+        Mám výstup z příkazové řádky (Winget Search) pro různé hledané výrazy.
+        Původní dotaz uživatele byl: "{self.query}"
+        SUROVÁ DATA Z WINGET:
+        '''{combined_output}'''
+        INSTRUKCE:
+        1. Analyzuj data a najdi aplikace odpovídající záměru.
+        2. Ignoruj balast, bety, knihovny.
+        3. Extrahuj Název, ID a Verzi.
+        VÝSTUPNÍ FORMÁT (čistý JSON pole):
+        [ {{ "name": "Název", "id": "Přesné.ID", "version": "verze", "website": "domena.com" }} ]
+        """
         try:
-            filter_prompt = f"""
-            Analyzuj Winget výstup pro dotaz: "{self.query}".
-            
-            DATA:
-            '''{combined_output}'''
-
-            1. Najdi relevantní aplikace (ignoruj drivery/libs).
-            2. Vždy preferuj novější verze.
-            3. Vrať JSON pole:
-            [
-                {{ "name": "App Name", "id": "App.ID", "version": "verze", "website": "url_odhad" }}
-            ]
-            """
-            response = client.models.generate_content(model="gemini-2.5-flash", contents=filter_prompt)
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=filter_prompt)
             raw_text = response.text
             json_str = raw_text.replace("```json", "").replace("```", "").strip()
-            
-            # Regex pro extrakci JSON pole, pokud AI kecá okolo
             match = re.search(r'\[.*\]', json_str, re.DOTALL)
             data = json.loads(match.group(0)) if match else []
-
             for item in data:
                 if not item.get('version') or item['version'] == "Latest": 
                     item['version'] = "Latest/Unknown"
-
             self.finished.emit(data)
-
         except Exception as e:
-            self.error.emit(f"Chyba zpracování: {str(e)}")
+            self.error.emit(f"Chyba zpracování výsledků: {str(e)}")
 
+# --- DIALOG ---
+class InstallationOptionsDialog(QDialog):
+    def __init__(self, parent=None, current_options=None):
+        super().__init__(parent)
+        self.setWindowTitle("Možnosti instalace")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: {COLORS['bg_main']}; color: {COLORS['fg']}; }}
+            QTabWidget::pane {{ border: 1px solid {COLORS['border']}; }}
+            QTabBar::tab {{ background: {COLORS['bg_sidebar']}; color: {COLORS['sub_text']}; padding: 8px 15px; margin-right: 2px; }}
+            QTabBar::tab:selected {{ background: {COLORS['item_bg']}; color: {COLORS['fg']}; border-top: 2px solid {COLORS['accent']}; }}
+            QLabel {{ color: {COLORS['fg']}; font-size: 10pt; }}
+            QCheckBox {{ color: {COLORS['fg']}; font-size: 10pt; spacing: 8px; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; border: 1px solid {COLORS['border']}; border-radius: 4px; }}
+            QCheckBox::indicator:checked {{ background-color: {COLORS['accent']}; border-color: {COLORS['accent']}; image: url(check.png); }}
+            QComboBox {{ background: {COLORS['input_bg']}; border: 1px solid {COLORS['border']}; padding: 5px; color: {COLORS['fg']}; border-radius: 4px; }}
+            QLineEdit {{ background: {COLORS['input_bg']}; border: 1px solid {COLORS['border']}; padding: 5px; color: {COLORS['fg']}; border-radius: 4px; }}
+        """)
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
 
-# --- 2. VZHLED ŘÁDKU (Widget) ---
-class AppRowWidget(QWidget):
-    def __init__(self, data, mode, parent_controller, cached_icon=None):
+        tab_general = QWidget()
+        layout_gen = QVBoxLayout(tab_general)
+        layout_gen.setContentsMargins(20, 20, 20, 20)
+        layout_gen.setSpacing(15)
+        self.chk_admin = QCheckBox("Spustit jako správce")
+        self.chk_interactive = QCheckBox("Interaktivní instalace")
+        self.chk_hash = QCheckBox("Přeskočit kontrolní součet")
+        layout_gen.addWidget(self.chk_admin)
+        layout_gen.addWidget(self.chk_interactive)
+        layout_gen.addWidget(self.chk_hash)
+        layout_gen.addSpacing(10)
+        line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setStyleSheet(f"color: {COLORS['border']};")
+        layout_gen.addWidget(line)
+        layout_gen.addSpacing(10)
+        lbl_ver = QLabel("Verze:")
+        self.combo_version = QComboBox()
+        self.combo_version.addItems(["Poslední (Latest)", "Zeptat se při instalaci"])
+        layout_gen.addWidget(lbl_ver)
+        layout_gen.addWidget(self.combo_version)
+        self.chk_ignore_updates = QCheckBox("Ignorovat budoucí aktualizace tohoto balíčku")
+        layout_gen.addWidget(self.chk_ignore_updates)
+        layout_gen.addStretch()
+        self.tabs.addTab(tab_general, "Obecné / Verze")
+
+        tab_arch = QWidget()
+        layout_arch = QVBoxLayout(tab_arch)
+        layout_arch.setContentsMargins(20, 20, 20, 20)
+        layout_arch.setSpacing(15)
+        lbl_arch = QLabel("Architektura:")
+        self.combo_arch = QComboBox()
+        self.combo_arch.addItems(["Výchozí", "x64", "x86", "arm64"])
+        layout_arch.addWidget(lbl_arch)
+        layout_arch.addWidget(self.combo_arch)
+        lbl_scope = QLabel("Rozsah instalace:")
+        self.combo_scope = QComboBox()
+        self.combo_scope.addItems(["Výchozí (User/Machine)", "User (Pouze pro mě)", "Machine (Pro všechny)"])
+        layout_arch.addWidget(lbl_scope)
+        layout_arch.addWidget(self.combo_scope)
+        lbl_path = QLabel("Umístění instalace:")
+        path_layout = QHBoxLayout()
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Nenastaveno nebo neznámo (Výchozí)")
+        btn_path = QPushButton("Vybrat")
+        btn_path.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_path.clicked.connect(self.select_path)
+        btn_path.setStyleSheet(f"background: {COLORS['item_bg']}; color: {COLORS['accent']}; border: none; font-weight: bold;")
+        path_layout.addWidget(self.path_edit)
+        path_layout.addWidget(btn_path)
+        layout_arch.addWidget(lbl_path)
+        layout_arch.addLayout(path_layout)
+        layout_arch.addStretch()
+        self.tabs.addTab(tab_arch, "Architektura a umístění")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        if current_options:
+            self.chk_admin.setChecked(current_options.get("admin", False))
+            self.chk_interactive.setChecked(current_options.get("interactive", False))
+            self.chk_hash.setChecked(current_options.get("hash", False))
+            self.combo_arch.setCurrentText(current_options.get("arch", "Výchozí"))
+            self.path_edit.setText(current_options.get("path", ""))
+
+    def select_path(self):
+        d = QFileDialog.getExistingDirectory(self, "Vybrat složku pro instalaci")
+        if d: self.path_edit.setText(d)
+
+    def get_options(self):
+        return {
+            "admin": self.chk_admin.isChecked(),
+            "interactive": self.chk_interactive.isChecked(),
+            "hash": self.chk_hash.isChecked(),
+            "version": self.combo_version.currentText(),
+            "arch": self.combo_arch.currentText(),
+            "scope": self.combo_scope.currentText(),
+            "path": self.path_edit.text()
+        }
+
+# --- TABULKOVÝ ŘÁDEK (WIDGET) ---
+
+class AppTableWidget(QWidget):
+    def __init__(self, data, parent_controller, queue_page_ref):
         super().__init__()
         self.data = data
-        self.mode = mode 
         self.controller = parent_controller
-        self.tooltip_filter = InstantTooltip()
+        self.queue_page = queue_page_ref
+        self.current_pixmap = None
+
+        self.setStyleSheet("background-color: transparent; font-size: 10pt;")
         
-        self.current_pixmap = cached_icon 
-
-        self.setStyleSheet("background-color: transparent;")
-
-        # Hlavní layout
         layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5) 
+        layout.setSpacing(15)
         
-        # Zarovnání a mezery
-        if mode == 'queue':
-            layout.setContentsMargins(10, 5, 10, 5)
-            layout.setSpacing(15)
-            layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        else:
-            layout.setContentsMargins(15, 10, 15, 10) 
-            layout.setSpacing(15) 
+        self.chk = QCheckBox()
+        self.chk.setFixedWidth(30)
+        self.chk.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chk.setStyleSheet(f"""
+            QCheckBox::indicator {{ width: 18px; height: 18px; border: 1px solid {COLORS['sub_text']}; border-radius: 4px; background: transparent; }}
+            QCheckBox::indicator:checked {{ background-color: {COLORS['accent']}; border-color: {COLORS['accent']}; image: url(check.png); }} 
+        """)
         
-        # 1. IKONA
+        if self.data['id'] in self.queue_page.queue_data:
+            self.chk.setChecked(True)
+        self.chk.stateChanged.connect(self.toggle_queue)
+        layout.addWidget(self.chk)
+
         self.icon_lbl = QLabel()
-        self.icon_lbl.setFixedSize(32, 32)
-        self.icon_lbl.setText("📦") 
-        self.icon_lbl.setStyleSheet("font-size: 24px; color: #888; border: none; background: transparent; font-family: 'Segoe UI Emoji';")
+        self.icon_lbl.setFixedSize(24, 24)
+        
+        default_icon_path = os.path.join("images", "package-thin.png")
+        if os.path.exists(default_icon_path):
+            pix = QPixmap(default_icon_path)
+            pix = pix.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.icon_lbl.setPixmap(pix)
+        else:
+            self.icon_lbl.setText("📦") 
+            self.icon_lbl.setStyleSheet("font-size: 12pt; color: #888; border: none; background: transparent;")
+        
         self.icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_lbl)
 
-        # LOGIKA IKONY
-        if cached_icon:
-            self.set_icon(cached_icon)
-        else:
-            self.icon_worker = IconWorker(
-                data.get('id'), 
-                data.get('website'), 
-                data.get('icon_url')
-            )
-            self.icon_worker.loaded.connect(self.set_icon)
-            self.icon_worker.start()
+        self.icon_worker = IconWorker(data.get('id'), data.get('website'), data.get('icon_url'))
+        self.icon_worker.loaded.connect(self.set_icon)
+        self.icon_worker.start()
 
-        # 2. TEXTOVÁ ČÁST
-        text_layout = QVBoxLayout()
-        
-        if mode == 'queue':
-            text_layout.setSpacing(0)
-            text_layout.setContentsMargins(0, 0, 0, 0)
-            text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        else:
-            text_layout.setSpacing(2) 
-        
         name_lbl = QLabel(data['name'])
-        name_lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: white; background: transparent; border: none;")
-        text_layout.addWidget(name_lbl)
-        
-        # 3. METADATA (Jen pro výsledky hledání)
-        if mode == 'result':
-            meta_container = QWidget()
-            meta_layout = QHBoxLayout(meta_container)
-            meta_layout.setContentsMargins(0, 0, 0, 0)
-            meta_layout.setSpacing(5)
-            
-            id_text = f"{data['id']}"
-            id_lbl = QLabel(id_text)
-            id_lbl.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
-            meta_layout.addWidget(id_lbl)
-            
-            website = data.get('website')
-            if website:
-                sep_lbl = QLabel("|")
-                sep_lbl.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
-                meta_layout.addWidget(sep_lbl)
-                
-                web_lbl = QLabel(website)
-                web_lbl.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
-                web_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-                
-                def open_web(e): webbrowser.open(website)
-                def hover_enter(e): web_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; text-decoration: underline; background: transparent;")
-                def hover_leave(e): web_lbl.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
-                    
-                web_lbl.mousePressEvent = open_web
-                web_lbl.enterEvent = hover_enter
-                web_lbl.leaveEvent = hover_leave
-                meta_layout.addWidget(web_lbl)
-                
-            meta_layout.addStretch()
-            text_layout.addWidget(meta_container)
-        
-        layout.addLayout(text_layout)
-        layout.addStretch()
-        
-        # 4. TLAČÍTKO AKCE
-        self.btn = QPushButton()
-        # ZMĚNA: Větší a obdélníkovější tlačítko (nebo zaoblený čtverec)
-        self.btn.setFixedSize(40, 34) 
-        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn.installEventFilter(self.tooltip_filter)
-        
-        if mode == 'result':
-            # --- TLAČÍTKO PŘIDAT (+) ---
-            if self.controller.is_in_queue(data['id']):
-                self.set_checked_state()
-            else:
-                self.set_add_state()
-            self.btn.clicked.connect(self.add_to_queue)
-        else:
-            # --- TLAČÍTKO ODEBRAT (X) - NOVÝ STYL ---
-            self.btn.setFixedSize(30, 30)
-            self.btn.setText("\uE8BB") # Stejný znak jako v HelpDialog
-            self.btn.setToolTip("Odebrat z fronty")
-            
-            self.btn.setStyleSheet(f"""
-                QPushButton {{ 
-                    background-color: transparent; 
-                    color: #777777; 
-                    font-family: 'Segoe MDL2 Assets'; /* Systémový font ikon */
-                    font-size: 10px;                  /* Velikost pro tento font */
-                    border: none; 
-                }}
-                QPushButton:hover {{ 
-                    color: {COLORS['danger']};        /* Červená při najetí */
-                    background-color: rgba(255, 0, 0, 0.1);
-                    border-radius: 4px;
-                }}
-                QPushButton:pressed {{
-                    background-color: rgba(255, 0, 0, 0.2);
-                }}
-            """)
-            self.btn.clicked.connect(self.remove_from_queue)
-            
-        layout.addWidget(self.btn)
+        name_lbl.setStyleSheet("font-weight: bold; color: white; background: transparent;")
+        layout.addWidget(name_lbl, stretch=4)
+
+        id_lbl = QLabel(data['id'])
+        id_lbl.setStyleSheet(f"color: {COLORS['sub_text']}; background: transparent;")
+        layout.addWidget(id_lbl, stretch=3)
+
+        ver_lbl = QLabel(data.get('version', 'Unknown'))
+        ver_lbl.setFixedWidth(100)
+        ver_lbl.setStyleSheet(f"color: {COLORS['sub_text']}; background: transparent;")
+        layout.addWidget(ver_lbl)
+
+        src_lbl = QLabel("Winget")
+        src_lbl.setFixedWidth(80)
+        src_lbl.setStyleSheet(f"color: {COLORS['sub_text']}; background: transparent;")
+        layout.addWidget(src_lbl)
 
     def set_icon(self, pixmap):
         self.current_pixmap = pixmap
-        self.icon_lbl.setPixmap(pixmap)
+        scaled = pixmap.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.icon_lbl.setPixmap(scaled)
         self.icon_lbl.setText("")
 
-    # --- STAVY TLAČÍTKA (Pro Result Mode) ---
-    # --- STAVY TLAČÍTKA (Pro Result Mode) ---
-    def set_add_state(self):
-        self.btn.setFixedSize(60, 60) # Stejná velikost jako ve frontě
-        self.btn.setText("\uE710")    # Systémový znak "Plus"
-        self.btn.setToolTip("Přidat do fronty")
-        self.btn.setEnabled(True)
-        
-        self.btn.setStyleSheet(f"""
-            QPushButton {{ 
-                background-color: transparent; 
-                color: #777777; 
-                font-family: 'Segoe MDL2 Assets'; 
-                font-size: 10px; 
-                border: none; 
-            }}
-            QPushButton:hover {{ 
-                color: {COLORS['accent']};  /* Modrá při najetí */
-                border-radius: 4px;
-            }}
-            QPushButton:pressed {{
-                background-color: rgba(255, 255, 255, 0.2);
-            }}
-        """)
+    def toggle_queue(self, state):
+        if state == 2:
+            self.queue_page.add_to_queue(self.data, self.current_pixmap)
+        else:
+            self.queue_page.remove_item_by_id(self.data['id'])
 
-    def set_checked_state(self):
-        self.btn.setText("✓")
-        self.btn.setToolTip("Položka je ve frontě")
-        self.btn.setEnabled(False)
-        # ZMĚNA STYLU: Plné zelené tlačítko
-        self.btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['success']}; 
-                color: white; 
-                border: none; 
-                border-radius: 6px; 
-                font-size: 18px;
-                font-weight: bold;
-            }}
-        """)
+# --- HLAVNÍ UI (InstallerPage) ---
 
-    def add_to_queue(self):
-        self.controller.add_item_to_queue(self.data, cached_icon=self.current_pixmap)
-        self.set_checked_state()
-
-    def remove_from_queue(self):
-        self.controller.remove_item_from_queue(self.data['id'])
-
-# --- 3. HLAVNÍ UI (InstallerPage) ---
 class InstallerPage(QWidget):
-    def __init__(self):
+    def __init__(self, queue_page_ref):
         super().__init__()
-        self.queue_data = {} 
-        self.tooltip_filter = InstantTooltip()
+        self.queue_page = queue_page_ref
+        self.smart_search_active = True
+        self.installation_options = {}
+        self._is_ai_hovered = False
 
-        # Globální tooltip styl
-        self.setStyleSheet(f"""
-            QToolTip {{
-                background-color: {COLORS['item_bg']};
-                color: white;
-                border: 1px solid {COLORS['accent']};
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 12px;
-                font-family: 'Segoe UI';
-            }}
-        """)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(40, 40, 40, 40)
-        main_layout.setSpacing(20)
-
-        # === LEVÁ ČÁST (VYHLEDÁVÁNÍ) ===
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        # === A. HORNÍ VYHLEDÁVACÍ LIŠTA ===
+        top_bar = QWidget()
+        top_bar.setStyleSheet(f"background-color: {COLORS['bg_main']}; border-bottom: 1px solid {COLORS['border']};")
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(20, 15, 20, 15)
         
-        lbl_title = QLabel("Chytrá instalace aplikací")
-        lbl_title.setStyleSheet("font-size: 22px; font-weight: bold; color: white;")
-        left_layout.addWidget(lbl_title)
-        
-        lbl_sub = QLabel("Napiš název aplikace nebo funkci (např. 'střih videa').")
-        lbl_sub.setStyleSheet("color: #888888; margin-bottom: 10px;")
-        left_layout.addWidget(lbl_sub)
+        lbl_title = QLabel("Hledat balíčky")
+        lbl_title.setStyleSheet("font-size: 14pt; font-weight: bold; color: white; border: none; outline: none;")
+        top_layout.addWidget(lbl_title)
+        top_layout.addSpacing(20)
 
-        search_row = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Zadejte dotaz...")
-        self.search_input.setStyleSheet(f"""
-            QLineEdit {{ 
+        # FIX: Container pro vyhledávání s PEVNOU ŠÍŘKOU
+        self.search_container = QFrame()
+        self.search_container.setFixedWidth(700) # Fixní délka
+        self.search_container.setFixedHeight(38)
+        self.search_container.setStyleSheet(f"""
+            QFrame {{
                 background-color: {COLORS['input_bg']}; 
                 border: 1px solid {COLORS['border']};
-                padding: 10px; font-size: 14px; border-radius: 4px; color: white;
+                border-radius: 6px;
             }}
-            QLineEdit:focus {{ border: 1px solid {COLORS['accent']}; }}
+            QFrame:focus-within {{
+                border: 1px solid {COLORS['accent']};
+            }}
         """)
+        search_cont_layout = QHBoxLayout(self.search_container)
+        search_cont_layout.setContentsMargins(10, 0, 5, 0)
+        search_cont_layout.setSpacing(0)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Zadejte záměr (např. 'střih videa')...")
+        self.search_input.setStyleSheet("border: none; background: transparent; color: white; font-size: 10pt;")
         self.search_input.returnPressed.connect(self.start_search)
-        search_row.addWidget(self.search_input)
-
-        self.btn_search = QPushButton("Hledat")
-        self.btn_search.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_search.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['accent']}; color: white; border: none;
-                padding: 10px 20px; border-radius: 4px; font-weight: bold; font-size: 14px;
-            }}
-            QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}
-        """)
+        
+        self.btn_search = HoverButton("", "images/magnifying-glass-thin.png", "fg")
+        self.btn_search.setFixedSize(32, 32)
+        self.btn_search.setIconSize(QSize(18, 18))
         self.btn_search.clicked.connect(self.start_search)
-        search_row.addWidget(self.btn_search)
-        left_layout.addLayout(search_row)
+        self.btn_search.setStyleSheet("background: transparent; border: none; padding: 0;")
 
+        search_cont_layout.addWidget(self.search_input)
+        search_cont_layout.addWidget(self.btn_search)
+        top_layout.addWidget(self.search_container) # Odebrán stretch faktor
+
+        # Tlačítko Smart Search
+        self.btn_toggle_ai = QPushButton()
+        self.btn_toggle_ai.setFixedHeight(36)
+        self.btn_toggle_ai.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_ai.setIconSize(QSize(20, 20))
+        self.btn_toggle_ai.setToolTip("Smart Search: Používá AI k nalezení softwaru.")
+        
+        self.btn_toggle_ai.enterEvent = self._ai_btn_enter
+        self.btn_toggle_ai.leaveEvent = self._ai_btn_leave
+        
+        self.update_toggle_icon()
+        self.btn_toggle_ai.clicked.connect(self.toggle_smart_search)
+        top_layout.addWidget(self.btn_toggle_ai)
+
+        top_layout.addStretch() # Přidán stretch až na konec barové lišty
+
+        main_layout.addWidget(top_bar)
+
+        # Progress bar
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0) 
+        self.progress.setFixedHeight(2)
         self.progress.setTextVisible(False)
-        self.progress.setStyleSheet(f"""
-            QProgressBar {{ min-height: 4px; max-height: 4px; background: transparent; border: none; margin-top: 5px; }} 
-            QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}
-        """)
+        self.progress.setStyleSheet(f"QProgressBar {{ border: none; background: transparent; }} QProgressBar::chunk {{ background-color: {COLORS['accent']}; }}")
         self.progress.hide()
-        left_layout.addWidget(self.progress)
+        main_layout.addWidget(self.progress)
+
+        # === B. ACTION BAR ===
+        action_bar = QWidget()
+        action_bar.setStyleSheet(f"background-color: {COLORS['bg_main']};")
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(20, 10, 20, 10)
+        action_layout.setSpacing(10)
+
+        split_container = QFrame()
+        split_container.setFixedHeight(34)
+        split_container.setStyleSheet(f"QFrame {{ background-color: {COLORS['item_bg']}; border: 1px solid {COLORS['border']}; border-radius: 6px; }} QFrame:hover {{ border-color: {COLORS['accent']}; }}")
+        split_layout = QHBoxLayout(split_container)
+        split_layout.setContentsMargins(0, 0, 0, 0)
+        split_layout.setSpacing(0)
+
+        self.btn_install_selection = QPushButton("  Nainstalovat vybrané")
+        self.btn_install_selection.setIcon(QIcon("images/download-simple-thin.png"))
+        self.btn_install_selection.setFixedHeight(32)
+        self.btn_install_selection.setStyleSheet(f"QPushButton {{ background: transparent; border: none; color: white; padding: 0 15px; font-weight: bold; font-size: 10pt; border-top-left-radius: 5px; border-bottom-left-radius: 5px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; }} QPushButton:hover {{ background-color: {COLORS['item_hover']}; }}")
+        self.btn_install_selection.clicked.connect(self.run_install_from_bar)
+
+        mid_line = QFrame()
+        mid_line.setFixedWidth(1)
+        mid_line.setStyleSheet(f"background-color: {COLORS['border']}; border: none;")
+
+        self.btn_settings_quick = QPushButton()
+        self.btn_settings_quick.setFixedSize(32, 32)
+        self.btn_settings_quick.setIcon(self.get_colored_icon_for_split("images/gear-six-thin.png", COLORS['fg']))
+        self.btn_settings_quick.setIconSize(QSize(18, 18))
+        self.btn_settings_quick.setStyleSheet(f"QPushButton {{ background: transparent; border: none; border-top-right-radius: 5px; border-bottom-right-radius: 5px; border-top-left-radius: 0px; border-bottom-left-radius: 0px; }} QPushButton:hover {{ background-color: {COLORS['item_hover']}; }}")
+        self.btn_settings_quick.clicked.connect(self.open_options_dialog)
+
+        split_layout.addWidget(self.btn_install_selection)
+        split_layout.addWidget(mid_line)
+        split_layout.addWidget(self.btn_settings_quick)
+        action_layout.addWidget(split_container)
+        
+        action_layout.addStretch()
+
+        self.btn_help = HoverButton(" Nápověda", "images/question-thin.png", "sub_text")
+        self.btn_help.setIconSize(QSize(20, 20))
+        self.btn_help.clicked.connect(self.show_help)
+        action_layout.addWidget(self.btn_help)
+        
+        main_layout.addWidget(action_bar)
+
+        # === C. TABULKA VÝSLEDKŮ ===
+        header_widget = QWidget()
+        header_widget.setStyleSheet(f"background-color: {COLORS['bg_sidebar']}; border: none; font-size: 9pt;")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(35, 8, 35, 8) 
+        header_layout.setSpacing(15)
+
+        h_headers = [("", 30), ("", 24), ("NÁZEV BALÍČKU", 0), ("ID BALÍČKU", 0), ("VERZE", 100), ("ZDROJ", 80)]
+        for i, (text, width) in enumerate(h_headers):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font-weight: bold; color: white; border: none;")
+            if width > 0: lbl.setFixedWidth(width)
+            stretch = 4 if i == 2 else (3 if i == 3 else 0)
+            header_layout.addWidget(lbl, stretch=stretch)
+        main_layout.addWidget(header_widget)
 
         self.results_list = QListWidget()
-        # Aplikujeme stejný minimalistický styl i zde
-        self.results_list.setStyleSheet(f"""
-            QListWidget {{ 
-                background-color: {COLORS['bg_sidebar']}; 
-                border: none; 
-                border-radius: 6px; 
-                outline: none; 
-            }}
-            QListWidget::item {{
-                background-color: transparent;
-                border: none;
-                padding: 0px;
-            }}
-            
-            /* --- MINIMALISTICKÝ SLIDER (SCROLLBAR) --- */
-            QScrollBar:vertical {{
-                border: none;
-                background-color: {COLORS['bg_sidebar']};
-                width: 8px;
-                margin: 0px 0px 0px 0px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color: #444444;
-                min-height: 20px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['accent']};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-                background: none;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-        """)
+        self.results_list.setStyleSheet(f"QListWidget {{ background-color: {COLORS['bg_main']}; border: none; padding: 0 30px; }} QListWidget::item {{ border-bottom: 1px solid {COLORS['border']}; padding: 0px; }} QListWidget::item:hover {{ background-color: {COLORS['item_hover']}; }}")
         self.results_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        left_layout.addWidget(self.results_list)
+        main_layout.addWidget(self.results_list)
 
-        main_layout.addWidget(left_panel, stretch=6)
+    # --- POMOCNÉ FUNKCE ---
 
-        # === PRAVÁ ČÁST (FRONTA) ===
-        right_panel = QWidget()
-        right_panel.setStyleSheet(f"background-color: {COLORS['bg_main']};")
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+    def _ai_btn_enter(self, event):
+        self._is_ai_hovered = True
+        self.update_toggle_icon()
+        super(QPushButton, self.btn_toggle_ai).enterEvent(event)
 
-        queue_header = QHBoxLayout()
-        q_title = QLabel("Instalační fronta")
-        q_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white;")
-        queue_header.addWidget(q_title)
-        queue_header.addStretch()
+    def _ai_btn_leave(self, event):
+        self._is_ai_hovered = False
+        self.update_toggle_icon()
+        super(QPushButton, self.btn_toggle_ai).leaveEvent(event)
+
+    def update_toggle_icon(self):
+        icon_path = "images/sparkle-fill.png" if self.smart_search_active else "images/sparkle-thin.png"
         
-        self.btn_import = QPushButton("📂")
-        self.btn_import.setToolTip("Načíst seznam aplikací ze souboru")
-        self._style_icon_btn(self.btn_import)
-        self.btn_import.clicked.connect(self.import_queue)
-        queue_header.addWidget(self.btn_import)
-
-        self.btn_export = QPushButton("💾")
-        self.btn_export.setToolTip("Uložit aktuální seznam aplikací do souboru")
-        self._style_icon_btn(self.btn_export)
-        self.btn_export.clicked.connect(self.export_queue)
-        queue_header.addWidget(self.btn_export)
+        if self.smart_search_active:
+            self.btn_toggle_ai.setText(" SMART")
+            self.btn_toggle_ai.setFixedWidth(90)
+        else:
+            self.btn_toggle_ai.setText("")
+            self.btn_toggle_ai.setFixedWidth(40) # Hover funguje jen na ikonu
+            
+        color = COLORS['accent'] if (self.smart_search_active or self._is_ai_hovered) else COLORS['fg']
         
-        self.btn_clear = QPushButton("🗑️")
-        self.btn_clear.setToolTip("Vymazat celou frontu aplikací")
-        self._style_icon_btn(self.btn_clear)
-        self.btn_clear.clicked.connect(self.clear_queue)
-        queue_header.addWidget(self.btn_clear)
+        if os.path.exists(icon_path):
+            pixmap = QPixmap(icon_path)
+            colored_pixmap = QPixmap(pixmap.size()); colored_pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(colored_pixmap); painter.drawPixmap(0, 0, pixmap)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(colored_pixmap.rect(), QColor(color)); painter.end()
+            self.btn_toggle_ai.setIcon(QIcon(colored_pixmap))
         
-        right_layout.addLayout(queue_header)
+        self.btn_toggle_ai.setStyleSheet(f"QPushButton {{ background: transparent; border: none; color: {color}; font-weight: bold; font-size: 9pt; outline: none; padding: 5px; text-align: left; padding-left: 10px; }}")
 
-        self.queue_list = QListWidget()
-        # Zde přidáváme sekci pro QScrollBar:vertical
-        self.queue_list.setStyleSheet(f"""
-            QListWidget {{ 
-                background-color: {COLORS['bg_sidebar']}; 
-                border: none; 
-                border-radius: 6px; 
-                outline: none;
-            }}
-            QListWidget::item {{
-                background-color: transparent;
-                border: none;
-                padding: 0px;
-            }}
-            QListWidget::item:selected {{
-                background-color: transparent;
-            }}
-            QListWidget::item:hover {{
-                background-color: transparent;
-            }}
+    def get_colored_icon_for_split(self, path, color_hex):
+        if not os.path.exists(path): return QIcon()
+        pixmap = QPixmap(path)
+        colored = QPixmap(pixmap.size()); colored.fill(Qt.GlobalColor.transparent)
+        p = QPainter(colored); p.drawPixmap(0, 0, pixmap); p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn); p.fillRect(colored.rect(), QColor(color_hex)); p.end()
+        return QIcon(colored)
 
-            /* --- MINIMALISTICKÝ SLIDER (SCROLLBAR) --- */
-            QScrollBar:vertical {{
-                border: none;
-                background-color: {COLORS['bg_sidebar']}; /* Pozadí stejné jako seznam */
-                width: 8px; /* Tenký slider */
-                margin: 0px 0px 0px 0px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background-color: #444444; /* Tmavě šedý jezdec */
-                min-height: 20px;
-                border-radius: 4px; /* Zakulacený jezdec */
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['accent']}; /* Po najetí se zbarví do barvy tématu */
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px; /* Skryje šipky nahoru/dolů */
-                background: none;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none; /* Kliknutí do prázdna nic neudělá vizuálně */
-            }}
-        """)
-        self.queue_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        right_layout.addWidget(self.queue_list)
+    def toggle_smart_search(self):
+        self.smart_search_active = not self.smart_search_active
+        self.update_toggle_icon()
+        self.search_input.setPlaceholderText("Zadejte záměr..." if self.smart_search_active else "Zadejte přesný název...")
 
-        self.btn_save_batch = QPushButton("Uložit instalační soubor")
-        self.btn_save_batch.setToolTip("Vytvoří spustitelný .bat soubor, kterým lze nainstalovat aplikace i bez této aplikace.")
-        self.btn_save_batch.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save_batch.installEventFilter(self.tooltip_filter)
-        self.btn_save_batch.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent; color: {COLORS['accent']}; border: 1px solid {COLORS['accent']};
-                padding: 10px; border-radius: 6px; font-weight: bold; font-size: 14px; margin-top: 10px;
-            }}
-            QPushButton:hover {{ background-color: {COLORS['accent']}; color: white; }}
-        """)
-        self.btn_save_batch.clicked.connect(self.save_batch_script)
-        right_layout.addWidget(self.btn_save_batch)
+    def run_install_from_bar(self):
+        if not self.queue_page.queue_data:
+            QMessageBox.warning(self, "Prázdná fronta", "Vyberte nejprve balíčky.")
+            return
+        self.queue_page.run_installation()
 
-        self.btn_install = QPushButton("Instalovat vše")
-        self.btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_install.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['success']}; color: white; border: none;
-                padding: 15px; border-radius: 6px; font-weight: bold; font-size: 16px; margin-top: 5px;
-            }}
-            QPushButton:hover {{ background-color: #138913; }}
-        """)
-        self.btn_install.clicked.connect(self.run_installation)
-        right_layout.addWidget(self.btn_install)
+    def open_options_dialog(self):
+        dlg = InstallationOptionsDialog(self, self.installation_options)
+        if dlg.exec(): self.installation_options = dlg.get_options()
 
-        main_layout.addWidget(right_panel, stretch=4)
-
-    def _style_icon_btn(self, btn):
-        btn.setFixedSize(40, 40)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.installEventFilter(self.tooltip_filter) 
-        btn.setStyleSheet(f"""
-            QPushButton {{ 
-                background-color: transparent; border: none; color: {COLORS['sub_text']}; 
-                font-family: 'Segoe UI Emoji'; font-size: 22px; padding: 0px; margin: 0px;
-            }} 
-            QPushButton:hover {{ 
-                color: {COLORS['accent']}; background-color: {COLORS['item_hover']}; border-radius: 5px;
-            }}
-            QPushButton:pressed {{ color: white; }}
-        """)
-
-    def is_in_queue(self, app_id):
-        """Pomocná metoda pro kontrolu, zda je ID ve frontě."""
-        return app_id in self.queue_data
+    def show_help(self):
+        QMessageBox.information(self, "Nápověda", "SMART: Používá AI k pochopení záměru.\nKLASIK: Standardní Winget hledání.")
 
     def start_search(self):
         query = self.search_input.text().strip()
         if not query: return
-        self.results_list.clear()
-        self.btn_search.setEnabled(False)
-        self.btn_search.setText("...")
-        self.progress.show()
-        self.worker = SearchWorker(query)
-        self.worker.finished.connect(self.on_search_finished)
-        self.worker.error.connect(self.on_search_error)
-        self.worker.start()
+        self.results_list.clear(); self.btn_search.setEnabled(False); self.progress.setRange(0, 0); self.progress.show()
+        self.worker = SearchWorker(query, use_smart_search=self.smart_search_active)
+        self.worker.finished.connect(self.on_search_finished); self.worker.error.connect(self.on_search_error); self.worker.start()
 
     def on_search_finished(self, results):
-        self.progress.hide()
-        self.btn_search.setEnabled(True)
-        self.btn_search.setText("Hledat")
-        if not results:
-            self.show_empty_state("Nic nenalezeno.")
-            return
-        
+        self.progress.hide(); self.btn_search.setEnabled(True)
+        if not results: self.show_empty_state("Nic nenalezeno."); return
         for app in results:
-            item = QListWidgetItem(self.results_list)
-            item.setSizeHint(QSize(0, 70))
-            # Vytvoříme widget a předáme 'self' jako controller
-            widget = AppRowWidget(app, 'result', self)
-            self.results_list.setItemWidget(item, widget)
+            item = QListWidgetItem(self.results_list); item.setSizeHint(QSize(0, 50))
+            widget = AppTableWidget(app, self, self.queue_page); self.results_list.setItemWidget(item, widget)
 
     def on_search_error(self, err_msg):
-        self.progress.hide()
-        self.btn_search.setEnabled(True)
-        self.btn_search.setText("Hledat")
-        self.show_empty_state(f"Chyba: {err_msg}")
+        self.progress.hide(); self.btn_search.setEnabled(True); self.show_empty_state(f"Chyba: {err_msg}")
 
     def show_empty_state(self, message):
-        item = QListWidgetItem(self.results_list)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        widget = QLabel(message)
-        widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        widget.setStyleSheet("color: #888; padding: 20px; background: transparent;")
-        item.setSizeHint(QSize(0, 100))
-        self.results_list.setItemWidget(item, widget)
+        item = QListWidgetItem(self.results_list); item.setFlags(Qt.ItemFlag.NoItemFlags); widget = QLabel(message); widget.setAlignment(Qt.AlignmentFlag.AlignCenter); widget.setStyleSheet("color: #888; padding: 40px; font-size: 10pt;"); item.setSizeHint(QSize(0, 100)); self.results_list.setItemWidget(item, widget)
 
-    def add_item_to_queue(self, data, cached_icon=None):
-        app_id = data['id']
-        if app_id in self.queue_data: return
-        self.queue_data[app_id] = data
-        
-        item = QListWidgetItem(self.queue_list)
-        item.setSizeHint(QSize(0, 50)) 
-        item.setData(Qt.ItemDataRole.UserRole, app_id)
-        
-        # ZDE SE PŘEDÁVÁ IKONA DÁL
-        widget = AppRowWidget(data, 'queue', self, cached_icon=cached_icon)
-        self.queue_list.setItemWidget(item, widget)
-
-    def remove_item_from_queue(self, app_id):
-        # 1. Odstranit z dat
-        if app_id in self.queue_data:
-            del self.queue_data[app_id]
-        
-        # 2. Odstranit z vizuálního seznamu fronty
-        for i in range(self.queue_list.count()):
-            item = self.queue_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == app_id:
-                self.queue_list.takeItem(i)
-                break
-        
-        # 3. AKTUALIZACE SEZNAMU VÝSLEDKŮ (Oprava bugu)
-        # Projdeme seznam výsledků hledání a pokud tam daná aplikace je, resetujeme tlačítko
+    def refresh_checkboxes(self):
         for i in range(self.results_list.count()):
-            item = self.results_list.item(i)
-            widget = self.results_list.itemWidget(item)
-            
-            # Musíme ověřit, zda je to AppRowWidget a zda má shodné ID
-            if widget and isinstance(widget, AppRowWidget) and widget.data.get('id') == app_id:
-                widget.set_add_state() # Reset zpět na "+"
-
-    def clear_queue(self):
-        # Uložíme si ID, která mažeme, abychom mohli resetovat tlačítka vlevo
-        ids_to_clear = list(self.queue_data.keys())
-        
-        self.queue_data.clear()
-        self.queue_list.clear()
-        
-        # Reset tlačítek vlevo pro všechna smazaná ID
-        for i in range(self.results_list.count()):
-            item = self.results_list.item(i)
-            widget = self.results_list.itemWidget(item)
-            if widget and isinstance(widget, AppRowWidget) and widget.data.get('id') in ids_to_clear:
-                widget.set_add_state()
-
-    def export_queue(self):
-        if not self.queue_data:
-            QMessageBox.warning(self, "Export", "Fronta je prázdná.")
-            return
-        file_path, _ = QFileDialog.getSaveFileName(self, "Exportovat seznam", "", "JSON Files (*.json)")
-        if file_path:
-            try:
-                data_list = list(self.queue_data.values())
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(data_list, f, indent=4)
-                QMessageBox.information(self, "Hotovo", "Seznam byl exportován.")
-            except Exception as e:
-                QMessageBox.critical(self, "Chyba", str(e))
-
-    def import_queue(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Importovat seznam", "", "JSON Files (*.json)")
-        if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data_list = json.load(f)
-                count = 0
-                for app in data_list:
-                    if 'id' in app and 'name' in app:
-                        if app['id'] not in self.queue_data:
-                            self.add_item_to_queue(app)
-                            # Zde bychom ideálně měli také aktualizovat levý panel, pokud tam aplikace je
-                            count += 1
-                
-                # Pro jistotu aktualizujeme všechny tlačítka vlevo
-                for i in range(self.results_list.count()):
-                    item = self.results_list.item(i)
-                    widget = self.results_list.itemWidget(item)
-                    if widget and isinstance(widget, AppRowWidget) and self.is_in_queue(widget.data['id']):
-                        widget.set_checked_state()
-
-                QMessageBox.information(self, "Hotovo", f"Importováno {count} položek.")
-            except Exception as e:
-                QMessageBox.critical(self, "Chyba", f"Nepodařilo se načíst soubor:\n{e}")
-
-    def save_batch_script(self):
-        if not self.queue_data:
-            QMessageBox.warning(self, "Uložit", "Fronta je prázdná.")
-            return
-        file_path, _ = QFileDialog.getSaveFileName(self, "Uložit instalační skript", "install_all.bat", "Batch Script (*.bat)")
-        if file_path:
-            try:
-                with open(file_path, "w", encoding="cp852") as f:
-                    f.write("@echo off\n")
-                    f.write("echo Zahajuji instalaci aplikaci (AI Winget Installer)...\n")
-                    f.write("echo --------------------------------------------------\n\n")
-                    for app in self.queue_data.values():
-                        f.write(f"echo Instaluji: {app['name']}...\n")
-                        cmd = f'winget install --id "{app["id"]}" -e --silent --accept-package-agreements --accept-source-agreements'
-                        f.write(f"{cmd}\n")
-                        f.write("echo --------------------------------------------------\n")
-                    f.write("\necho HOTOVO! Vse nainstalovano.\n")
-                    f.write("pause\n")
-                QMessageBox.information(self, "Hotovo", f"Skript uložen:\n{file_path}\n\nStačí na něj poklepat a instalace začne.")
-            except Exception as e:
-                QMessageBox.critical(self, "Chyba", str(e))
-
-    def run_installation(self):
-        if not self.queue_data:
-            QMessageBox.warning(self, "Prázdná fronta", "Nejdříve přidejte aplikace do fronty.")
-            return
-        
-        # Převedeme dict na list hodnot (to, co install_manager očekává)
-        install_list = list(self.queue_data.values())
-        
-        # Otevřeme dialog
-        dlg = InstallationDialog(install_list, self)
-        dlg.exec()
+            item = self.results_list.item(i); widget = self.results_list.itemWidget(item)
+            if isinstance(widget, AppTableWidget):
+                widget.chk.blockSignals(True); widget.chk.setChecked(widget.data['id'] in self.queue_page.queue_data); widget.chk.blockSignals(False)

@@ -1,15 +1,14 @@
 import subprocess
+import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QScrollArea, QFrame, QMessageBox)
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont, QCursor
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 
 from config import COLORS
 
-# --- 1. WIDGET PRO JEDEN NÁSTROJ (ŘÁDEK) ---
-# --- 1. WIDGET PRO JEDEN NÁSTROJ (ŘÁDEK) ---
 class ToolRowWidget(QWidget):
-    def __init__(self, icon, title, desc, command, log_desc, parent_view, is_gui=False):
+    def __init__(self, icon_name, title, desc, command, log_desc, parent_view, is_gui=False):
         super().__init__()
         self.command = command
         self.log_desc = log_desc
@@ -33,11 +32,17 @@ class ToolRowWidget(QWidget):
         layout.setContentsMargins(20, 15, 20, 15)
         layout.setSpacing(20)
         
-        # 1. IKONA
-        lbl_icon = QLabel(icon)
+        # 1. IKONA (Obrázek)
+        lbl_icon = QLabel()
         lbl_icon.setFixedSize(40, 40)
         lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_icon.setStyleSheet("font-size: 24px;") 
+        
+        icon_path = os.path.join("images", icon_name)
+        if os.path.exists(icon_path):
+            pix = QPixmap(icon_path)
+            pix = pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            lbl_icon.setPixmap(pix)
+            
         layout.addWidget(lbl_icon)
         
         # 2. TEXTY
@@ -56,13 +61,14 @@ class ToolRowWidget(QWidget):
         
         layout.addLayout(text_layout, stretch=1)
         
-        # 3. TLAČÍTKO SPUSTIT (Nový vzhled)
-        btn_run = QPushButton("▶  Spustit")
-        btn_run.setFixedSize(110, 36) # Širší, nižší (klasický button)
+        # 3. TLAČÍTKO SPUSTIT
+        btn_run = QPushButton(" Spustit")
+        # Pokud chcete ikonku i v tlačítku:
+        # btn_run.setIcon(QIcon("images/play.png")) 
+        btn_run.setFixedSize(110, 36) 
         btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_run.setToolTip(f"Spustit {title}")
         
-        # Moderní "Outline" styl (Obrys -> Výplň při hoveru)
         btn_run.setStyleSheet(f"""
             QPushButton {{ 
                 background-color: transparent; 
@@ -89,12 +95,10 @@ class ToolRowWidget(QWidget):
     def run_tool(self):
         self.parent_view.execute_tool(self.command, self.log_desc, self.is_gui)
         
-# --- 2. HLAVNÍ STRÁNKA (HEALTH CHECK) ---
 class HealthCheckPage(QWidget):
     def __init__(self):
         super().__init__()
         
-        # Hlavní Layout
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(40, 40, 40, 40)
         main_layout.setSpacing(20)
@@ -115,87 +119,58 @@ class HealthCheckPage(QWidget):
         main_layout.addLayout(header_layout)
         main_layout.addSpacing(10)
 
-        # Scroll Area s moderním sliderem
+        # Scroll Area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
-        # === MODERNÍ SCROLLBAR CSS ===
         scroll.setStyleSheet(f"""
             QScrollArea {{ border: none; background: transparent; }} 
             QWidget {{ background: transparent; }}
-            
-            /* Svislý posuvník (Slider) */
-            QScrollBar:vertical {{
-                border: none;
-                background: {COLORS['bg_main']}; /* Pozadí dráhy */
-                width: 10px; /* Tenký slider */
-                margin: 0px 0px 0px 0px;
-                border-radius: 5px;
-            }}
-            
-            /* Úchyt (Handle) */
-            QScrollBar::handle:vertical {{
-                background-color: #444; /* Tmavě šedá */
-                min-height: 30px;
-                border-radius: 5px; /* Zaoblené rohy */
-            }}
-            
-            /* Hover efekt na úchyt */
-            QScrollBar::handle:vertical:hover {{
-                background-color: {COLORS['accent']}; /* Zmodrá při najetí */
-            }}
-            
-            /* Skrytí šipek nahoře a dole */
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-                background: none;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
+            QScrollBar:vertical {{ background: {COLORS['bg_main']}; width: 10px; margin: 0; border-radius: 5px; }}
+            QScrollBar::handle:vertical {{ background-color: #444; min-height: 30px; border-radius: 5px; }}
+            QScrollBar::handle:vertical:hover {{ background-color: {COLORS['accent']}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; background: none; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
         """)
         
         tools_container = QWidget()
         tools_layout = QVBoxLayout(tools_container)
         tools_layout.setSpacing(12)
-        tools_layout.setContentsMargins(0, 0, 15, 0) # Padding vpravo kvůli scrollbaru
+        tools_layout.setContentsMargins(0, 0, 15, 0)
 
         # >> SEKCE: OPRAVY SYSTÉMU
         tools_layout.addWidget(self._create_section_label("Opravy Systému"))
         
-        self._add_tool(tools_layout, "🔍", "SFC Scan", "Kontrola a automatická oprava poškozených systémových souborů.", 
+        self._add_tool(tools_layout, "magnifying-glass-thin.png", "SFC Scan", "Kontrola a automatická oprava poškozených systémových souborů.", 
                        "sfc /scannow", "SFC Scan")
         
-        self._add_tool(tools_layout, "💾", "CHKDSK Scan", "Rychlá kontrola chyb na disku C: (režim pouze pro čtení).", 
+        self._add_tool(tools_layout, "hard-drives-thin.png", "CHKDSK Scan", "Rychlá kontrola chyb na disku C: (režim pouze pro čtení).", 
                        "chkdsk C: /scan", "Check Disk")
         
-        self._add_tool(tools_layout, "🩺", "DISM Check", "Diagnostika obrazu Windows (zjistí poškození).", 
+        self._add_tool(tools_layout, "first-aid-kit-thin.png", "DISM Check", "Diagnostika obrazu Windows (zjistí poškození).", 
                        "dism /online /cleanup-image /CheckHealth", "DISM Check")
         
-        self._add_tool(tools_layout, "🛠️", "DISM Restore", "Stáhne a opraví systémové soubory z Windows Update.", 
+        self._add_tool(tools_layout, "wrench-thin.png", "DISM Restore", "Stáhne a opraví systémové soubory z Windows Update.", 
                        "dism /online /cleanup-image /RestoreHealth", "DISM Restore")
 
         # >> SEKCE: ÚDRŽBA
         tools_layout.addWidget(self._create_section_label("Správa a Údržba"))
 
-        self._add_tool(tools_layout, "🗑️", "Smazat Temp", "Bezpečně vymaže dočasné soubory.", 
+        self._add_tool(tools_layout, "trash-thin.png", "Smazat Temp", "Bezpečně vymaže dočasné soubory.", 
                        'del /q/f/s %TEMP%\\*', "Temp Cleaner")
         
-        self._add_tool(tools_layout, "💿", "Vyčištění Disku", "Otevře nástroj Windows Disk Cleanup.", 
+        self._add_tool(tools_layout, "disc-thin.png", "Vyčištění Disku", "Otevře nástroj Windows Disk Cleanup.", 
                        "cleanmgr.exe", "Disk Cleanup", is_gui=True)
         
-        self._add_tool(tools_layout, "🔋", "Report Baterie", "Uloží HTML report o baterii na disk C:.", 
+        self._add_tool(tools_layout, "battery-full-thin.png", "Report Baterie", "Uloží HTML report o baterii na disk C:.", 
                        "powercfg /batteryreport /output \"C:\\battery_report.html\"", "Battery Report")
         
-        self._add_tool(tools_layout, "🧹", "WinSxS Cleanup", "Hloubkové čištění starých aktualizací (úspora místa).", 
-                       "dism /online /cleanup-image /StartComponentCleanup", "Component Cleanup")
+        self._add_tool(tools_layout, "broom-thin.png", "WinSxS Cleanup", "Hloubkové čištění starých aktualizací (úspora místa).", 
+                       "dism /online /cleanup-image /StartComponentCleanup", "Component Cleanup") # Note: broom might not be in set, use generic if needed
 
         tools_layout.addStretch()
         scroll.setWidget(tools_container)
         main_layout.addWidget(scroll)
-
-    # --- POMOCNÉ METODY ---
 
     def _create_section_label(self, text):
         lbl = QLabel(text)
@@ -206,28 +181,13 @@ class HealthCheckPage(QWidget):
         widget = ToolRowWidget(icon, title, desc, command, log_name, self, is_gui)
         layout.addWidget(widget)
 
-    # --- LOGIKA SPUŠTĚNÍ ---
-
     def execute_tool(self, command, desc, is_gui):
-        """
-        Spustí nástroj.
-        CLI: Otevře CMD okno. Pomocí 'mode con' nastavíme velikost 100x30, 
-        což donutí Windows okno lépe pozicovat (často na střed/kaskádu) a vypadá to profesionálněji.
-        """
         try:
             if is_gui:
                 subprocess.Popen(command, shell=True)
             else:
-                # 1. Nastavíme titulek okna
-                # 2. Nastavíme velikost okna (cols=100 lines=30) pro lepší viditelnost
-                # 3. Spustíme samotný příkaz
-                # && = provést další příkaz, jen pokud ten předchozí uspěl
-                
                 cmd_with_resize = f'mode con: cols=100 lines=30 && color 0A && echo --- SPUSTENO: {desc} --- && {command}'
-                
                 full_cmd = f'start "AI Winget - {desc}" cmd /k "{cmd_with_resize}"'
-                
                 subprocess.Popen(full_cmd, shell=True)
-
         except Exception as e:
             QMessageBox.critical(self, "Chyba spuštění", str(e))

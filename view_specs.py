@@ -5,9 +5,9 @@ import os
 import subprocess
 import winreg
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QFrame, QScrollArea, QSizePolicy, QApplication)
+                             QFrame, QSizePolicy, QApplication)
 from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QColor, QPalette, QCursor
+from PyQt6.QtGui import QCursor, QPixmap
 from config import COLORS
 
 # --- LOGIKA ZÍSKÁVÁNÍ DAT ---
@@ -245,8 +245,8 @@ class HardwareDetailWidget(QWidget):
 # --- WIDGETY ---
 
 class InfoCard(QFrame):
-    """Horní karty (OS, PC Name)"""
-    def __init__(self, icon, title, value):
+    """Horní karty (OS, PC Name) s PNG ikonou"""
+    def __init__(self, icon_name, title, value):
         super().__init__()
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         self.setStyleSheet(f"QFrame {{ background-color: {COLORS['item_bg']}; border-radius: 6px; border: 1px solid {COLORS['border']}; }}")
@@ -254,8 +254,15 @@ class InfoCard(QFrame):
         layout.setContentsMargins(15, 10, 20, 10) 
         layout.setSpacing(15)
         
-        lbl_icon = QLabel(icon)
-        lbl_icon.setStyleSheet("font-size: 20px; background: transparent; border: none;")
+        # Ikona
+        lbl_icon = QLabel()
+        icon_path = os.path.join("images", icon_name)
+        if os.path.exists(icon_path):
+            pix = QPixmap(icon_path)
+            pix = pix.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            lbl_icon.setPixmap(pix)
+        
+        lbl_icon.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(lbl_icon)
         
         text_layout = QVBoxLayout()
@@ -405,9 +412,10 @@ class SpecsPage(QWidget):
         except:
             pc_name, os_ver, arch = "Neznámé", "Windows", "x64"
 
-        info_layout.addWidget(InfoCard("🖥️", "NÁZEV ZAŘÍZENÍ", pc_name))
-        info_layout.addWidget(InfoCard("🪟", "OPERAČNÍ SYSTÉM", os_ver))
-        info_layout.addWidget(InfoCard("⚙️", "ARCHITEKTURA", arch))
+        # POUŽITÍ NOVÝCH IKON
+        info_layout.addWidget(InfoCard("desktop-tower-thin.png", "NÁZEV ZAŘÍZENÍ", pc_name))
+        info_layout.addWidget(InfoCard("windows-logo-thin.png", "OPERAČNÍ SYSTÉM", os_ver))
+        info_layout.addWidget(InfoCard("circuitry-thin.png", "ARCHITEKTURA", arch))
         info_layout.addStretch()
         
         main_layout.addLayout(info_layout)

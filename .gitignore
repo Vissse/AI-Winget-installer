@@ -24,3 +24,4 @@ build/
 .readmeaiignore
 
 build.py
+view_installer_old.py
