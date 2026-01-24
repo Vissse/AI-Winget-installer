@@ -9,6 +9,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
 from config import COLORS
 from install_manager import InstallationDialog
 from view_installer import HoverButton, AppTableWidget, InstallationOptionsDialog 
+from config import resource_path
 
 # --- TABULKOVÝ ŘÁDEK FRONTY ---
 class QueueTableWidget(AppTableWidget):
@@ -87,7 +88,7 @@ class QueuePage(QWidget):
         split_layout.setSpacing(0)
 
         self.btn_install_main = QPushButton("  Nainstalovat vybrané")
-        self.btn_install_main.setIcon(QIcon("images/download-simple-thin.png"))
+        self.btn_install_main.setIcon(QIcon(resource_path("images/download-simple-thin.png")))
         self.btn_install_main.setFixedHeight(32)
         # Fixní zaoblení pouze vlevo
         self.btn_install_main.setStyleSheet(f"QPushButton {{ background: transparent; border: none; color: white; padding: 0 15px; font-weight: bold; font-size: 10pt; border-top-left-radius: 5px; border-bottom-left-radius: 5px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; }} QPushButton:hover {{ background-color: {COLORS['item_hover']}; }}")
@@ -268,9 +269,23 @@ class QueuePage(QWidget):
         if dlg.exec(): self.installation_options = dlg.get_options()
 
     def get_colored_icon(self, path, color_hex):
-        if not os.path.exists(path): return QIcon()
-        pixmap = QPixmap(path); colored = QPixmap(pixmap.size()); colored.fill(Qt.GlobalColor.transparent)
-        p = QPainter(colored); p.drawPixmap(0, 0, pixmap); p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn); p.fillRect(colored.rect(), QColor(color_hex)); p.end()
+        """ Načte ikonu a softwarově ji přebarví """
+        # OPRAVA: Obalení cesty funkcí resource_path
+        full_path = resource_path(path)
+        
+        if not os.path.exists(full_path): 
+            return QIcon()
+            
+        pixmap = QPixmap(full_path)
+        colored = QPixmap(pixmap.size())
+        colored.fill(Qt.GlobalColor.transparent)
+        
+        p = QPainter(colored)
+        p.drawPixmap(0, 0, pixmap)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        p.fillRect(colored.rect(), QColor(color_hex))
+        p.end()
+        
         return QIcon(colored)
 
     def add_separator(self, layout):

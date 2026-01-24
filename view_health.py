@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 
 from config import COLORS
+from config import resource_path
 
 class ToolRowWidget(QWidget):
     def __init__(self, icon_name, title, desc, command, log_desc, parent_view, is_gui=False):
@@ -37,7 +38,7 @@ class ToolRowWidget(QWidget):
         lbl_icon.setFixedSize(40, 40)
         lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        icon_path = os.path.join("images", icon_name)
+        icon_path = resource_path(os.path.join("images", icon_name))
         if os.path.exists(icon_path):
             pix = QPixmap(icon_path)
             pix = pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)

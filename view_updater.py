@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QFileInfo
 from PyQt6.QtGui import QIcon
 from config import COLORS
 from view_installer import HoverButton, IconWorker
+from config import resource_path
 
 # --- 1. WORKERY (Zůstávají stejné) ---
 class ScanWorker(QThread):
@@ -178,7 +179,7 @@ class UpdaterPage(QWidget):
         action_layout.setContentsMargins(20, 10, 20, 10)
 
         self.btn_refresh = QPushButton("  Skenovat")
-        self.btn_refresh.setIcon(QIcon("images/arrows-clockwise-thin.png"))
+        self.btn_refresh.setIcon(QIcon(resource_path("images/arrows-clockwise-thin.png")))
         self.btn_refresh.setFixedHeight(34)
         self.btn_refresh.setStyleSheet(f"QPushButton {{ background-color: {COLORS['item_bg']}; color: white; border: 1px solid {COLORS['border']}; padding: 0 15px; border-radius: 6px; font-weight: bold; }} QPushButton:hover {{ border-color: {COLORS['accent']}; }}")
         self.btn_refresh.clicked.connect(self.scan_updates)

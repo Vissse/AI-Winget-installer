@@ -15,6 +15,7 @@ from PyQt6.QtGui import QIcon, QAction, QPixmap, QImage, QPainter, QColor
 from config import COLORS
 from settings_manager import SettingsManager
 from google import genai 
+from config import resource_path
 
 # Import presetu
 try:
@@ -28,7 +29,7 @@ class HoverButton(QPushButton):
     """Tlačítko, které při najetí myší softwarově přebarví ikonku i text."""
     def __init__(self, text, icon_path, style_template, parent=None):
         super().__init__(text, parent)
-        self.icon_path = icon_path
+        self.icon_path = resource_path(icon_path)
         self.style_template = style_template
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.set_colored_icon(False)
@@ -407,7 +408,7 @@ class AppTableWidget(QWidget):
         self.icon_lbl = QLabel()
         self.icon_lbl.setFixedSize(24, 24)
         
-        default_icon_path = os.path.join("images", "package-thin.png")
+        default_icon_path = resource_path(os.path.join("images", "package-thin.png"))
         if os.path.exists(default_icon_path):
             pix = QPixmap(default_icon_path)
             pix = pix.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
@@ -552,7 +553,7 @@ class InstallerPage(QWidget):
         split_layout.setSpacing(0)
 
         self.btn_install_selection = QPushButton("  Nainstalovat vybrané")
-        self.btn_install_selection.setIcon(QIcon("images/download-simple-thin.png"))
+        self.btn_install_selection.setIcon(QIcon(resource_path("images/download-simple-thin.png")))
         self.btn_install_selection.setFixedHeight(32)
         self.btn_install_selection.setStyleSheet(f"QPushButton {{ background: transparent; border: none; color: white; padding: 0 15px; font-weight: bold; font-size: 10pt; border-top-left-radius: 5px; border-bottom-left-radius: 5px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; }} QPushButton:hover {{ background-color: {COLORS['item_hover']}; }}")
         self.btn_install_selection.clicked.connect(self.run_install_from_bar)
@@ -616,7 +617,7 @@ class InstallerPage(QWidget):
         super(QPushButton, self.btn_toggle_ai).leaveEvent(event)
 
     def update_toggle_icon(self):
-        icon_path = "images/sparkle-fill.png" if self.smart_search_active else "images/sparkle-thin.png"
+        icon_path = resource_path("images/sparkle-fill.png") if self.smart_search_active else resource_path("images/sparkle-thin.png")
         
         if self.smart_search_active:
             self.btn_toggle_ai.setText(" SMART")
@@ -638,8 +639,9 @@ class InstallerPage(QWidget):
         self.btn_toggle_ai.setStyleSheet(f"QPushButton {{ background: transparent; border: none; color: {color}; font-weight: bold; font-size: 9pt; outline: none; padding: 5px; text-align: left; padding-left: 10px; }}")
 
     def get_colored_icon_for_split(self, path, color_hex):
-        if not os.path.exists(path): return QIcon()
-        pixmap = QPixmap(path)
+        full_path = resource_path(path)
+        if not os.path.exists(full_path): return QIcon()
+        pixmap = QPixmap(full_path)
         colored = QPixmap(pixmap.size()); colored.fill(Qt.GlobalColor.transparent)
         p = QPainter(colored); p.drawPixmap(0, 0, pixmap); p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn); p.fillRect(colored.rect(), QColor(color_hex)); p.end()
         return QIcon(colored)

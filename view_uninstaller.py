@@ -10,6 +10,7 @@ from PyQt6.QtGui import QPixmap, QImage, QIcon
 from workers import WingetListWorker, UninstallWorker
 from config import COLORS
 from view_installer import HoverButton
+from config import resource_path
 
 # --- 1. WORKER PRO IKONY ---
 class LocalIconWorker(QThread):
@@ -174,7 +175,7 @@ class UninstallerPage(QWidget):
         action_layout.setContentsMargins(20, 10, 20, 10)
 
         self.refresh_btn = QPushButton("  Načíst aplikace")
-        self.refresh_btn.setIcon(QIcon("images/arrows-clockwise-thin.png"))
+        self.refresh_btn.setIcon(QIcon(resource_path("images/arrows-clockwise-thin.png")))
         self.refresh_btn.setFixedHeight(34); self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_btn.setStyleSheet(f"QPushButton {{ background-color: {COLORS['item_bg']}; color: white; border: 1px solid {COLORS['border']}; padding: 0 15px; border-radius: 6px; font-weight: bold; }} QPushButton:hover {{ border-color: {COLORS['accent']}; }}")
         self.refresh_btn.clicked.connect(self.load_apps)

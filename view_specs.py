@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui import QCursor, QPixmap
 from config import COLORS
+from config import resource_path
 
 # --- LOGIKA ZÍSKÁVÁNÍ DAT ---
 
@@ -256,7 +257,7 @@ class InfoCard(QFrame):
         
         # Ikona
         lbl_icon = QLabel()
-        icon_path = os.path.join("images", icon_name)
+        icon_path = resource_path(os.path.join("images", icon_name))
         if os.path.exists(icon_path):
             pix = QPixmap(icon_path)
             pix = pix.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)

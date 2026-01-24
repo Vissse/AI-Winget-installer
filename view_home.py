@@ -3,6 +3,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from config import COLORS
+from config import resource_path
 
 class FunctionRow(QWidget):
     """Minimalistický řádek funkce s obrázkovou ikonou"""
@@ -25,7 +26,7 @@ class FunctionRow(QWidget):
         """)
         
         # Načtení PNG ikony
-        icon_path = os.path.join("images", icon_name)
+        icon_path = resource_path(os.path.join("images", icon_name))
         if os.path.exists(icon_path):
             pix = QPixmap(icon_path)
             # Přebarvení ikony není triviální bez maskování, 

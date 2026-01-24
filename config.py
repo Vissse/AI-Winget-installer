@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 from pathlib import Path
 
 CURRENT_VERSION = "7.5"
@@ -53,6 +54,14 @@ THEMES = {
 # --- 2. NAČTENÍ AKTIVNÍHO TÉMATU ---
 # Defaultně nastavíme Dark
 COLORS = THEMES["Dark (Default)"].copy()
+
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 # Pokud existuje nastavení, pokusíme se načíst uložené téma
 try:

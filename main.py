@@ -23,14 +23,7 @@ from view_queue import QueuePage
 from splash import SplashScreen
 import boot_system
 from updater import AppUpdater
-
-def resource_path(relative_path):
-    """ Získá absolutní cestu k souboru (funguje pro dev i pro PyInstaller exe) """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+from config import resource_path
 
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
@@ -149,19 +142,19 @@ class MainWindow(QMainWindow):
         self.sidebar_list.itemClicked.connect(self.on_sidebar_click)
         
         # Skladba menu
-        self.add_sidebar_item("Přehled", "house-simple-thin.png", 0)
+        self.add_sidebar_item("Přehled", "images/house-simple-thin.png", 0)
         self.add_sidebar_separator()
         
-        self.add_sidebar_item("Hledat balíčky", "package-thin.png", 1)
-        self.add_sidebar_item("Instalační fronta", "tray-arrow-down-thin.png", 7)
+        self.add_sidebar_item("Hledat balíčky", "images/package-thin.png", 1)
+        self.add_sidebar_item("Instalační fronta", "images/tray-arrow-down-thin.png", 7)
         self.add_sidebar_separator()
         
-        self.add_sidebar_item("Aktualizace aplikací", "arrows-clockwise-thin.png", 2)
-        self.add_sidebar_item("Odinstalace aplikací", "trash-simple-thin.png", 4)
+        self.add_sidebar_item("Aktualizace aplikací", "images/arrows-clockwise-thin.png", 2)
+        self.add_sidebar_item("Odinstalace aplikací", "images/trash-simple-thin.png", 4)
         self.add_sidebar_separator()
         
-        self.add_sidebar_item("Kontrola stavu PC", "heartbeat-thin.png", 3)
-        self.add_sidebar_item("Specifikace PC", "desktop-thin.png", 6)
+        self.add_sidebar_item("Kontrola stavu PC", "images/heartbeat-thin.png", 3)
+        self.add_sidebar_item("Specifikace PC", "images/desktop-thin.png", 6)
         
         sidebar_layout.addWidget(self.sidebar_list)
         sidebar_layout.addSpacing(20) 
@@ -175,7 +168,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(10)
 
         self.btn_settings = QPushButton(" Nastavení")
-        self.btn_settings.setIcon(QIcon("images/gear-thin.png"))
+        self.btn_settings.setIcon(QIcon(resource_path("images/gear-thin.png")))
         self.btn_settings.setIconSize(QSize(20, 20))
         self.btn_settings.setFixedHeight(40)
         self.btn_settings.clicked.connect(self.go_to_settings)
@@ -227,7 +220,7 @@ class MainWindow(QMainWindow):
         for i in range(self.sidebar_list.count()):
             item = self.sidebar_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == 2:
-                pix = QPixmap("images/arrows-clockwise-thin.png")
+                pix = QPixmap(resource_path("images/arrows-clockwise-thin.png"))
                 if pix.isNull(): return
                 canvas = QPixmap(32, 32)
                 canvas.fill(Qt.GlobalColor.transparent)
@@ -249,19 +242,25 @@ class MainWindow(QMainWindow):
         for i in range(self.sidebar_list.count()):
             item = self.sidebar_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == 2:
-                item.setIcon(QIcon("images/arrows-clockwise-thin.png"))
+                item.setIcon(QIcon(resource_path("images/arrows-clockwise-thin.png")))
                 item.setData(Qt.ItemDataRole.UserRole + 1, count)
                 if count > 0: item.setForeground(QColor(COLORS['fg']))
                 else: item.setForeground(QColor(COLORS['sub_text']))
                 break
 
-    def add_sidebar_item(self, text, icon, index):
+    def add_sidebar_item(self, text, icon_relative_path, index):
+        """Vytvoří položku menu a automaticky ošetří cestu k ikoně."""
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, index)
         item.setData(Qt.ItemDataRole.UserRole + 1, 0)
-        if os.path.exists(os.path.join("images", icon)):
-            item.setIcon(QIcon(os.path.join("images", icon)))
+        
+        # OPRAVENO: Použití resource_path pro ikony v listu
+        full_icon_path = resource_path(icon_relative_path)
+        if os.path.exists(full_icon_path):
+            item.setIcon(QIcon(full_icon_path))
+            
         self.sidebar_list.addItem(item)
+        
 
     def add_sidebar_separator(self):
         item = QListWidgetItem("")
@@ -295,8 +294,23 @@ class MainWindow(QMainWindow):
     def apply_custom_title_bar(self):
         try:
             hwnd = self.winId().__int__()
+            # 1. Aktivace tmavého režimu pro systémové prvky (včetně menu)
             windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(c_int(1)), 4)
-        except: pass
+            
+            # 2. Nastavení barvy pozadí horní lišty na barvu sidebaru
+            # Barva musí být ve formátu 0x00BBGGRR (hexadecimální, obrácené pořadí barev)
+            color_hex = COLORS['bg_sidebar'].lstrip('#')
+            r, g, b = int(color_hex[0:2], 16), int(color_hex[2:4], 16), int(color_hex[4:6], 16)
+            dwm_color = (b << 16) | (g << 8) | r
+            
+            # Atribut 35 odpovídá DWMWA_CAPTION_COLOR
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(c_int(dwm_color)), 4)
+            
+            # 3. Volitelně: Nastavení barvy textu v liště na bílou (Atribut 36 = DWMWA_TEXT_COLOR)
+            white_color = 0x00FFFFFF
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(c_int(white_color)), 4)
+        except Exception as e:
+            print(f"DWM error: {e}")
 
 if __name__ == "__main__":
     # 1. Boot Checks
