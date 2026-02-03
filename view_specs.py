@@ -1,447 +1,619 @@
-import platform
-import socket
 import sys
 import os
+import platform
+import socket
 import subprocess
-import winreg
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QFrame, QSizePolicy, QApplication)
-from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QCursor, QPixmap
-from config import COLORS
-from config import resource_path
+import re
+import csv
+import io
+import json
+import datetime
 
-# --- LOGIKA ZÍSKÁVÁNÍ DAT ---
+from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QLabel, QFrame, QStackedWidget, QScrollArea, QPushButton, 
+                             QSizePolicy)
+from PyQt6.QtCore import Qt, QSize, QVariantAnimation, QTimer, QRect, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QPainterPath
 
-def get_windows_product_name():
-    try:
-        key_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion"
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
-            product_name, _ = winreg.QueryValueEx(key, "ProductName")
-        ver = sys.getwindowsversion()
-        if ver.major == 10 and ver.build >= 22000 and "Windows 10" in product_name:
-            product_name = product_name.replace("Windows 10", "Windows 11")
-        return product_name
-    except:
-        return f"Windows {platform.release()}"
+# --- KONFIGURACE A BARVY ---
+try:
+    from config import COLORS, resource_path
+except ImportError:
+    COLORS = {
+        'bg': '#121212', 'bg_sidebar': '#1e1e1e', 'item_bg': '#252525', 
+        'item_hover': '#333333', 'accent': '#3498db', 'fg': '#ffffff', 
+        'sub_text': '#aaaaaa', 'border': '#333333', 'success': '#2ecc71'
+    }
+    def resource_path(p): return p
 
-def run_wmic_command(command):
-    try:
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        result = subprocess.run(command, capture_output=True, text=True, shell=True, startupinfo=startupinfo, encoding='cp852', errors='ignore')
-        if not result.stdout.strip():
-             # Fallback na utf-8
-             result = subprocess.run(command, capture_output=True, text=True, shell=True, startupinfo=startupinfo, encoding='utf-8', errors='ignore')
-        return result.stdout
-    except Exception: return ""
+# --- LOGIKA ZÍSKÁVÁNÍ DAT PC ---
 
-def clean_hw_string(text):
-    if not text: return "Neznámé"
-    # Odstraní více mezer a stripne
-    return " ".join(text.split())
+def clean_disk_name(name):
+    name = re.sub(r'\b(SSD|NVMe|HDD|USB)\b', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\b\d+\s?[GT]B?\b', '', name, flags=re.IGNORECASE)
+    return " ".join(name.split())
+
+def get_market_size(real_gb):
+    if real_gb >= 900: return f"{round(real_gb / 1000)} TB"
+    standards = [120, 128, 240, 250, 256, 480, 500, 512, 960, 1000]
+    closest = min(standards, key=lambda x: abs(x - real_gb))
+    if abs(closest - real_gb) / closest < 0.10:
+        if closest in [480, 500]: return "512 GB"
+        if closest in [240, 250]: return "256 GB"
+        if closest == 120: return "128 GB"
+        return f"{closest} GB"
+    return f"{real_gb} GB"
+
+def format_wmi_date(raw_date):
+    raw_date = str(raw_date).strip()
+    formatted = "Neznámé"
+    if len(raw_date) >= 8 and raw_date[:8].isdigit():
+        formatted = f"{raw_date[6:8]}.{raw_date[4:6]}.{raw_date[0:4]}"
+    elif "/Date(" in raw_date:
+        match = re.search(r'\d+', raw_date)
+        if match:
+            timestamp = int(match.group()) / 1000
+            d = datetime.datetime.fromtimestamp(timestamp)
+            formatted = d.strftime('%d.%m.%Y')
+    return formatted
+
+def get_gpu_vendor_from_id(pnp_id):
+    """Rozklíčuje výrobce karty (Subvendor) z PNP ID stringu"""
+    if not pnp_id: return ""
+    
+    # Hledáme část SUBSYS_xxxxxxxx. Výrobce jsou obvykle poslední 4 znaky.
+    # Příklad: PCI\VEN_10DE&DEV_2882&SUBSYS_895E1043... -> 1043 je ASUS
+    match = re.search(r'SUBSYS_([0-9A-F]{8})', pnp_id, re.IGNORECASE)
+    if match:
+        hex_str = match.group(1)
+        subsys_id = hex_str[-4:].upper() # Vezmeme poslední 4 znaky (Little Endian)
+        
+        # Známé ID výrobců (PCI Vendor ID)
+        vendors = {
+            "1043": "ASUS",
+            "1462": "MSI",
+            "1458": "GIGABYTE",
+            "3842": "EVGA",
+            "19DA": "ZOTAC",
+            "1682": "XFX",
+            "1DA2": "SAPPHIRE",
+            "1849": "ASRock",
+            "196E": "PNY",
+            "10DE": "NVIDIA", # Founders Edition / Reference
+            "1002": "AMD",    # Reference
+            "1028": "DELL",
+            "103C": "HP",
+            "17AA": "Lenovo"
+        }
+        return vendors.get(subsys_id, "")
+    return ""
 
 def get_pc_specs():
+    os_name = f"Windows {platform.release()}"
+    try:
+        build = int(platform.version().split('.')[-1])
+        os_base = "Windows 11" if build >= 22000 else "Windows 10"
+        edition_raw = subprocess.check_output("wmic os get caption", shell=True).decode(errors='ignore')
+        edition_text = edition_raw.split('\n')[1].strip()
+        os_name = f"{os_base} Pro" if "Pro" in edition_text else (f"{os_base} Home" if "Home" in edition_text else os_base)
+    except: pass
+
     specs = {
-        "cpu": "Neznámý procesor", 
-        "gpu": "Neznámá grafika", 
-        "ram": "Neznámá paměť", 
-        "mobo": "Neznámá deska"
+        "cpu": "Neznámý Procesor", 
+        "cpu_details": {}, 
+        "gpu": "Neznámá Grafika", 
+        "gpu_details": {}, 
+        "ram": "0 GB", 
+        "ram_details": [], 
+        "mobo": {
+            "vendor": "", "product": "Neznámá Deska", "version": "", 
+            "serial": "", "bios": ""
+        },
+        "storage": [], "os": os_name, "pc_name": socket.gethostname()
     }
     
     try:
-        # 1. CPU
-        raw_cpu = run_wmic_command("wmic cpu get name")
-        for line in raw_cpu.split('\n'):
-            if line.strip() and "Name" not in line:
-                specs["cpu"] = clean_hw_string(line)
-                break
+        # --- CPU ---
+        cmd_cpu = 'powershell "Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, L2CacheSize, L3CacheSize, SocketDesignation, VirtualizationFirmwareEnabled | ConvertTo-Json"'
+        try:
+            cpu_output = subprocess.check_output(cmd_cpu, shell=True).decode(errors='ignore')
+            if cpu_output.strip():
+                cpu_data = json.loads(cpu_output)
+                if isinstance(cpu_data, list): cpu_data = cpu_data[0]
 
-        # 2. GPU
-        raw_gpu = run_wmic_command("wmic path win32_VideoController get name")
-        gpus = []
-        for line in raw_gpu.split('\n'):
-            if line.strip() and "Name" not in line: 
-                gpus.append(clean_hw_string(line))
-        
-        selected_gpu = gpus[0] if gpus else "Standardní grafický adaptér"
-        # Priorita dedikované grafiky
-        for g in gpus:
-            if any(x in g.upper() for x in ["NVIDIA", "AMD", "RTX", "GTX", "RADEON"]): 
-                selected_gpu = g
-                break
-        specs["gpu"] = selected_gpu
+                name = cpu_data.get("Name", "Neznámý Procesor").strip()
+                cores = cpu_data.get("NumberOfCores", 0)
+                threads = cpu_data.get("NumberOfLogicalProcessors", 0)
+                speed_mhz = cpu_data.get("MaxClockSpeed", 0)
+                speed_ghz = f"{speed_mhz / 1000:.1f} GHz" if speed_mhz else "N/A"
+                l2_kb = cpu_data.get("L2CacheSize", 0); l2_mb = f"{l2_kb // 1024} MB" if l2_kb else "N/A"
+                l3_kb = cpu_data.get("L3CacheSize", 0); l3_mb = f"{l3_kb // 1024} MB" if l3_kb else "N/A"
+                socket_type = cpu_data.get("SocketDesignation", "Neznámý")
+                virt = "Zapnuta" if cpu_data.get("VirtualizationFirmwareEnabled") else "Vypnuta"
 
-        # 3. ZÁKLADNÍ DESKA
-        manuf = run_wmic_command("wmic baseboard get Manufacturer")
-        prod = run_wmic_command("wmic baseboard get Product")
-        
-        m_val = next((l.strip() for l in manuf.split('\n') if l.strip() and "Manufacturer" not in l), "MB")
-        p_val = next((l.strip() for l in prod.split('\n') if l.strip() and "Product" not in l), "")
-        
-        specs["mobo"] = clean_hw_string(f"{m_val} {p_val}")
+                specs["cpu"] = name
+                specs["cpu_details"] = { "cores": f"{cores} Jader / {threads} Vláken", "speed": speed_ghz, "l2": l2_mb, "l3": l3_mb, "socket": socket_type, "virt": virt }
+            else:
+                specs["cpu"] = subprocess.check_output("wmic cpu get name", shell=True).decode(errors='ignore').split('\n')[1].strip()
+        except: specs["cpu"] = "Chyba načítání CPU"
 
-        # 4. RAM (Detailní info: Výrobce, Model, Kapacita, Rychlost)
-        # Příkaz získá více informací
-        raw_mem = run_wmic_command("wmic memorychip get Manufacturer, Capacity, Speed, PartNumber")
-        
-        total_bytes = 0
-        speeds = set()
-        manufacturers = set()
-        
-        # Parsování řádek po řádku
-        # WMIC výstup je formátován do sloupců, ale Python split() si s tím poradí
-        lines = raw_mem.strip().split('\n')
-        
-        for line in lines:
-            if "Capacity" in line or not line.strip(): 
-                continue
+        # --- GPU (S DETEKCÍ VÝROBCE "ASUS" ATD.) ---
+        # Přidali jsme PNPDeviceID do dotazu
+        cmd_gpu_basic = 'powershell "Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, DriverDate, PNPDeviceID | ConvertTo-Json"'
+        try:
+            gpu_output = subprocess.check_output(cmd_gpu_basic, shell=True).decode(errors='ignore')
+            
+            # VRAM Logic
+            vram_final_gb = "Neznámá"
+            
+            # 1. NVIDIA-SMI
+            try:
+                nvidia_size_cmd = "nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits"
+                nvidia_size_out = subprocess.check_output(nvidia_size_cmd, shell=True).decode(errors='ignore').strip()
+                if nvidia_size_out and nvidia_size_out.isdigit():
+                    gb_val = int(nvidia_size_out) / 1024
+                    vram_final_gb = f"{int(gb_val)} GB" if gb_val.is_integer() else f"{gb_val:.1f} GB"
+            except: pass
+
+            # 2. Registry
+            if vram_final_gb == "Neznámá":
+                try:
+                    cmd_gpu_reg = 'powershell "Get-ItemProperty -Path \'HKLM:\\SYSTEM\\ControlSet001\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\*\' -ErrorAction SilentlyContinue | Where-Object { $_.\'HardwareInformation.QwMemorySize\' -ne $null } | Sort-Object \'HardwareInformation.QwMemorySize\' -Descending | Select-Object -First 1 -ExpandProperty \'HardwareInformation.QwMemorySize\'"'
+                    reg_out = subprocess.check_output(cmd_gpu_reg, shell=True).decode(errors='ignore').strip()
+                    if reg_out and reg_out.isdigit() and int(reg_out) > 0:
+                        vram_final_gb = f"{round(int(reg_out) / (1024**3))} GB"
+                except: pass
+
+            if gpu_output.strip():
+                gpu_data = json.loads(gpu_output)
+                if isinstance(gpu_data, list): gpu_data = gpu_data[0]
+
+                g_name = gpu_data.get("Name", "Neznámá Grafika")
+                pnp_id = gpu_data.get("PNPDeviceID", "")
                 
-            parts = line.split()
-            # Hledáme čísla pro Capacity a Speed, zbytek může být text
-            
-            # Kapacita je obvykle velmi velké číslo
-            cap = 0
-            spd = 0
-            
-            # Jednoduchá heuristika pro extrakci dat z řádku
-            for part in parts:
-                if part.isdigit():
-                    val = int(part)
-                    if val > 100000000: # Pravděpodobně kapacita v bajtech
-                        cap = val
-                    elif 100 < val < 10000: # Pravděpodobně frekvence v MHz
-                        spd = val
-                else:
-                    # Pokud to není číslo a není to "Unknown" nebo "0000", je to asi výrobce/partnumber
-                    if len(part) > 2 and "Unknown" not in part and "0000" not in part:
-                        manufacturers.add(part)
+                # --- DETEKCE SUBVENDORA (ASUS, MSI...) ---
+                subvendor = get_gpu_vendor_from_id(pnp_id)
+                if subvendor and subvendor not in g_name.upper():
+                    g_name = f"{subvendor} {g_name}"
 
-            if cap > 0:
-                total_bytes += cap
-            if spd > 0:
-                speeds.add(spd)
+                drv_ver = gpu_data.get("DriverVersion", "Neznámá")
+                drv_date = format_wmi_date(gpu_data.get("DriverDate", ""))
 
-        # Výpočet GB
-        total_gb = round(total_bytes / (1024**3))
+                # 3. WMI Fallback
+                if vram_final_gb == "Neznámá":
+                    try:
+                        cmd_wmi_ram = 'powershell "Get-CimInstance Win32_VideoController | Select-Object AdapterRAM | ConvertTo-Json"'
+                        ram_out = json.loads(subprocess.check_output(cmd_wmi_ram, shell=True).decode(errors='ignore'))
+                        if isinstance(ram_out, list): ram_out = ram_out[0]
+                        wmi_bytes = ram_out.get("AdapterRAM", 0)
+                        if wmi_bytes > 0: vram_final_gb = f"{round(wmi_bytes / (1024**3))} GB"
+                    except: pass
+                
+                if ".0 GB" in vram_final_gb: vram_final_gb = vram_final_gb.replace(".0 GB", " GB")
+
+                specs["gpu"] = g_name
+                specs["gpu_details"] = { "vram": vram_final_gb, "driver_ver": drv_ver, "driver_date": drv_date }
+            else:
+                specs["gpu"] = subprocess.check_output("wmic path win32_VideoController get name", shell=True).decode(errors='ignore').split('\n')[1].strip()
+        except: specs["gpu"] = "Chyba GPU"
+
+        # --- Motherboard ---
+        cmd_mb = 'powershell "Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer, Product, Version, SerialNumber | ConvertTo-Json"'
+        mb_data = json.loads(subprocess.check_output(cmd_mb, shell=True).decode(errors='ignore'))
+        if isinstance(mb_data, list): mb_data = mb_data[0]
+        specs["mobo"]["vendor"] = mb_data.get("Manufacturer", "").strip()
+        prod = mb_data.get("Product", "").strip()
+        specs["mobo"]["product"] = mb_data.get("Version", prod) if "Ltd" in prod else prod
+        specs["mobo"]["version"] = mb_data.get("Version", "").strip()
+        specs["mobo"]["serial"] = mb_data.get("SerialNumber", "").strip()
+
+        # --- BIOS ---
+        cmd_bios = 'powershell "Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate | ConvertTo-Json"'
+        bios_data = json.loads(subprocess.check_output(cmd_bios, shell=True).decode(errors='ignore'))
+        if isinstance(bios_data, list): bios_data = bios_data[0]
+        bios_ver = bios_data.get("SMBIOSBIOSVersion", "")
+        formatted_date = f" ({format_wmi_date(bios_data.get('ReleaseDate', ''))})"
+        specs["mobo"]["bios"] = f"{bios_ver}{formatted_date}"
         
-        # Sestavení řetězce
-        if total_gb > 0:
-            speed_str = f"{max(speeds)} MHz" if speeds else ""
-            manuf_str = " ".join(list(manufacturers)[:2]) # Vezmeme max 2 slova výrobce, ať to není dlouhé
-            
-            # Finální formát: "32 GB Kingston Fury (3200 MHz)"
-            ram_info = f"{total_gb} GB"
-            if manuf_str:
-                ram_info += f" {manuf_str}"
-            if speed_str:
-                ram_info += f" ({speed_str})"
-            
-            specs["ram"] = ram_info
-        else:
-            # Fallback pokud detailní sken selže
-            specs["ram"] = "Neznámá paměť (Zkuste spustit jako Admin)"
+        # --- RAM ---
+        ram_cmd = "wmic memorychip get capacity, speed, manufacturer, partnumber /format:csv"
+        ram_raw = subprocess.check_output(ram_cmd, shell=True).decode(errors='ignore')
+        f = io.StringIO(ram_raw.strip()); reader = csv.DictReader(f); total_ram = 0
+        for row in reader:
+            try:
+                cap = int(row.get('Capacity', 0)); total_ram += cap
+                specs["ram_details"].append(f"{row.get('Manufacturer', '').strip()} {row.get('PartNumber', '').strip()}\n{cap // (1024**3)} GB @ {row.get('Speed', 'Unknown')} MHz")
+            except: continue
+        specs["ram"] = f"{total_ram // (1024**3)} GB"
 
-    except Exception as e: 
-        print(f"HW Error: {e}")
-        pass
-        
+        # --- Storage ---
+        ps_cmd = 'powershell "Get-PhysicalDisk | Select-Object FriendlyName, MediaType, BusType, SpindleSpeed, Size | ConvertTo-Json"'
+        try:
+            disks_raw = subprocess.check_output(ps_cmd, shell=True).decode(errors='ignore')
+            disks_data = json.loads(disks_raw)
+            if isinstance(disks_data, dict): disks_data = [disks_data] 
+
+            for d in disks_data:
+                name = d.get('FriendlyName', 'Unknown')
+                media_type = d.get('MediaType', 'Unspecified')
+                bus = d.get('BusType', 'Unknown')
+                spindle = d.get('SpindleSpeed', 0)
+                size_bytes = d.get('Size', 0)
+
+                if media_type == 'Unspecified':
+                    if spindle > 0: media_type = 'HDD'
+                    elif 'HD' in name and 'SSD' not in name: media_type = 'HDD'
+                    elif 'SSD' in name: media_type = 'SSD'
+
+                if size_bytes:
+                    real_gb = round(size_bytes / (1024**3))
+                    specs["storage"].append({
+                        "name": name,
+                        "type": media_type,
+                        "bus": "NVMe" if bus == "NVMe" else bus,
+                        "real_size": f"{real_gb} GB",
+                        "market_size": get_market_size(real_gb)
+                    })
+        except: pass
+
+    except: pass
     return specs
 
-class CopyPopup(QFrame):
-    """Malý popup toast, který informuje o uložení do schránky."""
-    def __init__(self, parent, text):
-        super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setStyleSheet(f"""
-            background-color: {COLORS['accent']};
-            color: white;
-            border-radius: 4px;
-            padding: 8px 15px;
-            font-weight: bold;
-            font-size: 12px;
-        """)
-        layout = QVBoxLayout(self)
-        lbl = QLabel(text)
-        lbl.setStyleSheet("border: none; background: transparent;")
-        layout.addWidget(lbl)
-        self.adjustSize()
+# --- UI KOMPONENTY ---
 
-class HardwareDetailWidget(QWidget):
-    """
-    Interaktivní widget pro hardware s podporou kopírování do schránky.
-    """
-    def __init__(self, label, value):
+class MoboRow(QFrame):
+    def __init__(self, title, value):
         super().__init__()
-        self.label_text = label
-        self.value_text = value
-        
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMouseTracking(True)
-        
-        # Výchozí styl
-        self.normal_style = f"""
-            QWidget {{
-                background-color: {COLORS['item_bg']};
-                border-radius: 6px;
-                border-bottom: 2px solid {COLORS['border']};
-            }}
-        """
-        # Styl při najetí (hover) - zvýraznění okraje a mírné zesvětlení
-        self.hover_style = f"""
-            QWidget {{
-                background-color: {COLORS['item_hover']};
-                border-radius: 6px;
-                border-bottom: 2px solid {COLORS['accent']};
-            }}
-        """
-        
-        self.setStyleSheet(self.normal_style)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(5)
-        
-        self.lbl_label = QLabel(label)
-        self.lbl_label.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; font-weight: bold; text-transform: uppercase; background: transparent; border: none;")
-        
-        self.lbl_val = QLabel(value)
-        self.lbl_val.setWordWrap(True)
-        self.lbl_val.setStyleSheet("color: white; font-size: 16px; font-weight: 500; background: transparent; border: none;")
-        
-        layout.addWidget(self.lbl_label)
-        layout.addWidget(self.lbl_val)
+        self.setStyleSheet(f"border-bottom: 1px solid {COLORS['border']}; background: transparent;")
+        l = QHBoxLayout(self); l.setContentsMargins(10, 8, 15, 8); l.setSpacing(20)
+        t_lbl = QLabel(str(title).upper()); t_lbl.setFixedWidth(180) 
+        t_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-size: 10px; font-weight: bold; border: none;")
+        v_lbl = QLabel(str(value)); v_lbl.setWordWrap(True)
+        v_lbl.setStyleSheet(f"color: {COLORS['fg']}; font-size: 13px; border: none;")
+        l.addWidget(t_lbl); l.addWidget(v_lbl)
 
-    def enterEvent(self, event):
-        """Animace při najetí myši."""
-        self.setStyleSheet(self.hover_style)
-        super().enterEvent(event)
+class DiskRow(QFrame):
+    def __init__(self, disk_data, col_widths, parent_page):
+        super().__init__()
+        self.parent_page = parent_page; self.data = disk_data
+        self.setCursor(Qt.CursorShape.PointingHandCursor); self.setFixedHeight(45)
+        clean_name = clean_disk_name(self.data['name'])
+        self.copy_text = f"{clean_name} {self.data['type']} {self.data['market_size']}"
+        self.layout = QHBoxLayout(self); self.layout.setContentsMargins(15, 0, 15, 0); self.layout.setSpacing(0)
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.add_column(clean_name, col_widths[0], f"color: {COLORS['fg']}; font-weight: 500;")
+        self.add_column(self.data['type'], col_widths[1], f"color: {COLORS['sub_text']};")
+        self.add_column(self.data['bus'], col_widths[2], f"color: {COLORS['sub_text']};")
+        self.add_column(self.data['market_size'], col_widths[3], f"color: {COLORS['fg']}; font-weight: bold;")
+        self.add_column(self.data['real_size'], col_widths[4], f"color: {COLORS['sub_text']};")
 
-    def leaveEvent(self, event):
-        """Návrat do původního stavu."""
-        self.setStyleSheet(self.normal_style)
-        super().leaveEvent(event)
-
+    def add_column(self, text, width, style):
+        lbl = QLabel(text); lbl.setFixedWidth(width); lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        lbl.setStyleSheet(f"background: transparent; border: none; {style}"); self.layout.addWidget(lbl)
+    def enterEvent(self, event): self.setStyleSheet(f"background-color: {COLORS['item_hover']}; border-radius: 4px;")
+    def leaveEvent(self, event): self.setStyleSheet("background-color: transparent;")
     def mousePressEvent(self, event):
-        """Kopírování do schránky po kliknutí."""
         if event.button() == Qt.MouseButton.LeftButton:
-            clipboard = QApplication.clipboard()
-            clipboard.setText(self.value_text)
-            self.show_copy_popup()
-        super().mousePressEvent(event)
+            QApplication.clipboard().setText(self.copy_text); self.parent_page.show_copy_notification()
 
-    def show_copy_popup(self):
-        """Zobrazí toast popup a po 1.5s ho schová."""
-        self.popup = CopyPopup(self.window(), "Zkopírováno do schránky")
-        
-        # Pozicování nad widgetem
-        global_pos = self.mapToGlobal(QPoint(0, 0))
-        self.popup.move(global_pos.x() + (self.width() // 2) - (self.popup.width() // 2), 
-                        global_pos.y() - 40)
-        
-        self.popup.show()
-        # Automatické smazání po 1500ms
-        QTimer.singleShot(1500, self.popup.close)
+class AnimatedNavItem(QFrame):
+    clicked = pyqtSignal(int)
+    def __init__(self, text, index, parent=None):
+        super().__init__(parent)
+        self.index = index; self.active = False; self.setCursor(Qt.CursorShape.PointingHandCursor); self.setFixedHeight(45)
+        self._bg_color = QColor("transparent"); self._bar_height_factor = 0.0
+        layout = QHBoxLayout(self); layout.setContentsMargins(15, 0, 10, 0)
+        self.label = QLabel(text); self.label.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 13px; font-weight: 500; border: none; background: transparent;")
+        layout.addWidget(self.label)
+        self.anim = QVariantAnimation(self); self.anim.setDuration(250); self.anim.setStartValue(0.0); self.anim.setEndValue(1.0)
+        self.anim.valueChanged.connect(self._animate_step)
+    def set_active(self, active): self.active = active; self._animate_step(1.0 if active else 0.0)
+    def _animate_step(self, val):
+        if not self.active:
+            target_bg = QColor(COLORS['item_hover'])
+            self._bg_color = QColor(target_bg.red(), target_bg.green(), target_bg.blue(), int(255 * val))
+            self._bar_height_factor = val
+            self.label.setStyleSheet(f"color: {COLORS['fg'] if val > 0.5 else COLORS['sub_text']}; font-size: 13px; font-weight: 500; border: none; background: transparent;")
+        else:
+            self._bg_color = QColor(COLORS['item_bg']); self._bar_height_factor = 1.0
+            self.label.setStyleSheet(f"color: #ffffff; font-size: 13px; border: none; background: transparent;")
+        self.update()
+    def enterEvent(self, event): 
+        if not self.active: self.anim.setDirection(QVariantAnimation.Direction.Forward); self.anim.start()
+    def leaveEvent(self, event): 
+        if not self.active: self.anim.setDirection(QVariantAnimation.Direction.Backward); self.anim.start()
+    def mousePressEvent(self, event): self.clicked.emit(self.index)
+    def paintEvent(self, event):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1); radius = 8
+        if self._bg_color.alpha() > 0:
+            p.setBrush(self._bg_color); p.setPen(Qt.PenStyle.NoPen); p.drawRoundedRect(rect, radius, radius)
+        if self._bar_height_factor > 0:
+            p.setBrush(QColor(COLORS['accent'])); p.setPen(Qt.PenStyle.NoPen)
+            h = rect.height() * self._bar_height_factor; y = rect.y() + (rect.height() - h) / 2
+            path = QPainterPath(); path.addRoundedRect(rect.x(), rect.y(), rect.width(), rect.height(), radius, radius)
+            p.setClipPath(path); p.drawRect(QRect(0, int(y), 4, int(h))); p.setClipping(False)
 
-# --- WIDGETY ---
+class AnimatedCard(QFrame):
+    def __init__(self, title, value):
+        super().__init__()
+        self.setFixedHeight(85)
+        self._bg_color = QColor(COLORS['item_bg']); self._bar_height_factor = 0.0 
+        layout = QVBoxLayout(self); layout.setContentsMargins(22, 12, 15, 12)
+        self.t_lbl = QLabel(title.upper()); self.t_lbl.setStyleSheet(f"color: {COLORS['accent']}; font-size: 10px; font-weight: bold; background:transparent;")
+        self.v_lbl = QLabel(value); self.v_lbl.setWordWrap(True); self.v_lbl.setStyleSheet(f"color: {COLORS['fg']}; font-size: 14px; font-weight: 500; background:transparent;")
+        layout.addWidget(self.t_lbl); layout.addWidget(self.v_lbl)
+        self.anim = QVariantAnimation(self); self.anim.setDuration(250); self.anim.setStartValue(0.0); self.anim.setEndValue(1.0)
+        self.anim.valueChanged.connect(self._animate_step)
+    def _animate_step(self, val):
+        start_bg = QColor(COLORS['item_bg']); end_bg = QColor(COLORS['item_hover'])
+        r = start_bg.red() + (end_bg.red() - start_bg.red()) * val
+        g = start_bg.green() + (end_bg.green() - start_bg.green()) * val
+        b = start_bg.blue() + (end_bg.blue() - start_bg.blue()) * val
+        self._bg_color = QColor(int(r), int(g), int(b)); self._bar_height_factor = val; self.update()
+    def enterEvent(self, event): self.anim.setDirection(QVariantAnimation.Direction.Forward); self.anim.start()
+    def leaveEvent(self, event): self.anim.setDirection(QVariantAnimation.Direction.Backward); self.anim.start()
+    def paintEvent(self, event):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect(); radius = 8
+        p.setBrush(self._bg_color); p.setPen(Qt.PenStyle.NoPen); p.drawRoundedRect(rect, radius, radius)
+        if self._bar_height_factor > 0:
+            p.setBrush(QColor(COLORS['accent'])); h = rect.height() * self._bar_height_factor; y = rect.y() + (rect.height() - h) / 2
+            path = QPainterPath(); path.addRoundedRect(0, 0, rect.width(), rect.height(), radius, radius)
+            p.setClipPath(path); p.drawRect(QRect(0, int(y), 4, int(h))); p.setClipping(False)
 
-class InfoCard(QFrame):
-    """Horní karty (OS, PC Name) s PNG ikonou"""
+class MiniToast(QLabel):
+    def __init__(self, parent):
+        super().__init__("Zkopírováno!", parent)
+        self.setStyleSheet(f"background: {COLORS['accent']}; color: white; padding: 5px 15px; border-radius: 4px; font-weight: bold;")
+        self.adjustSize(); self.hide()
+
+class InfoHeaderCard(QFrame):
     def __init__(self, icon_name, title, value):
         super().__init__()
-        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        self.setStyleSheet(f"QFrame {{ background-color: {COLORS['item_bg']}; border-radius: 6px; border: 1px solid {COLORS['border']}; }}")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 10, 20, 10) 
-        layout.setSpacing(15)
+        # ZMĚNA 1: Průhledné pozadí a žádný rámeček (odstraněno border: 1px...)
+        self.setStyleSheet("background-color: transparent; border: none;")
         
-        # Ikona
-        lbl_icon = QLabel()
-        icon_path = resource_path(os.path.join("images", icon_name))
-        if os.path.exists(icon_path):
-            pix = QPixmap(icon_path)
-            pix = pix.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            lbl_icon.setPixmap(pix)
+        l = QHBoxLayout(self)
+        # Upravené odsazení, aby to bez rámečku nebylo příliš "rozplizlé"
+        l.setContentsMargins(5, 8, 15, 8) 
         
-        lbl_icon.setStyleSheet("background: transparent; border: none;")
-        layout.addWidget(lbl_icon)
+        icon_lbl = QLabel()
+        path = resource_path(f"images/{icon_name}")
+        if os.path.exists(path):
+            pix = QPixmap(path).scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            p = QPainter(pix)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            
+            # ZMĚNA 2: Barva ikonky. 
+            # Původně: COLORS['sub_text'] (šedá). 
+            # Nově: COLORS['fg'] (bílá - stejná jako text "Windows 11").
+            # Pokud chcete modrou, dejte sem: COLORS['accent']
+            p.fillRect(pix.rect(), QColor(COLORS['fg'])) 
+            
+            p.end()
+            icon_lbl.setPixmap(pix)
+        l.addWidget(icon_lbl)
         
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(2)
+        v_l = QVBoxLayout()
+        v_l.setSpacing(0)
         
-        lbl_title = QLabel(title)
-        lbl_title.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 10px; font-weight: bold; background: transparent; border: none;")
-        lbl_value = QLabel(value)
-        lbl_value.setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent; border: none;")
+        # Nadpis (např. OPERAČNÍ SYSTÉM)
+        t = QLabel(title.upper())
+        t.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 9px; font-weight: bold; border: none;")
         
-        text_layout.addWidget(lbl_title)
-        text_layout.addWidget(lbl_value)
-        layout.addLayout(text_layout)
+        # Hodnota (např. Windows 11 Pro)
+        v = QLabel(value)
+        v.setStyleSheet(f"color: {COLORS['fg']}; font-size: 13px; font-weight: bold; border: none;")
+        
+        v_l.addWidget(t)
+        v_l.addWidget(v)
+        l.addLayout(v_l)
 
-class MiniToast(QFrame):
-    """Extrémně malý a minimalistický popup."""
-    def __init__(self, parent, text):
-        super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        
-        # Kompaktní styl
-        self.setStyleSheet(f"""
-            background-color: {COLORS['accent']};
-            color: white;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 11px;
-            font-weight: bold;
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        lbl = QLabel(text)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl)
-        self.adjustSize()
-
-class ClickableValueLabel(QLabel):
-    """Speciální Label, který reaguje na myš pouze tehdy, pokud míříte přímo na text."""
-    def __init__(self, text, parent_widget):
-        super().__init__(text)
-        self.parent_widget = parent_widget
-        self.original_text = text
-        
-        # Klíčové nastavení pro zabránění ořezu:
-        # Pevná politika zajistí, že label nebude větší ani menší, než mu určíme
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        self.setWordWrap(False) # Zakážeme zalamování na více řádků
-        
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMouseTracking(True)
-        
-        self.update_style(hover=False)
-        
-        # Tato funkce donutí label, aby se roztáhl přesně podle délky textu
-        self.adjustSize()
-
-    def update_style(self, hover=False):
-        color = COLORS['accent'] if hover else "white"
-        decoration = "underline" if hover else "none"
-        self.setStyleSheet(f"""
-            color: {color}; 
-            font-size: 16px; 
-            font-weight: 500; 
-            background: transparent; 
-            border: none;
-            text-decoration: {decoration};
-        """)
-
-    def enterEvent(self, event):
-        self.update_style(hover=True)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.update_style(hover=False)
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            QApplication.clipboard().setText(self.original_text)
-            if hasattr(self.parent_widget, 'show_mini_toast'):
-                self.parent_widget.show_mini_toast()
-        super().mousePressEvent(event)
-
-class HardwareDetailWidget(QWidget):
-    def __init__(self, label, value):
-        super().__init__()
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: {COLORS['item_bg']};
-                border-radius: 6px;
-                border-bottom: 2px solid {COLORS['border']};
-            }}
-        """)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 15, 20, 15)
-        layout.setSpacing(5)
-        
-        lbl_type = QLabel(label)
-        lbl_type.setStyleSheet(f"color: {COLORS['accent']}; font-size: 11px; font-weight: bold; text-transform: uppercase; background: transparent; border: none;")
-        layout.addWidget(lbl_type)
-
-        # Obalíme label do dalšího layoutu, aby se neroztahoval do šířky
-        val_container = QHBoxLayout()
-        val_container.setContentsMargins(0, 0, 0, 0)
-        
-        self.lbl_val = ClickableValueLabel(value, self)
-        val_container.addWidget(self.lbl_val)
-        val_container.addStretch() # Toto odtlačí label doleva a zabrání jeho roztahování
-        
-        layout.addLayout(val_container)
-
-    def show_mini_toast(self):
-        """Zobrazení toastu nad kurzorem."""
-        self.toast = MiniToast(self.window(), "Zkopírováno")
-        cursor_pos = QCursor.pos()
-        self.toast.move(cursor_pos.x() - (self.toast.width() // 2), cursor_pos.y() - 35)
-        self.toast.show()
-        QTimer.singleShot(1000, self.toast.close)
-
-# --- HLAVNÍ STRÁNKA SPECIFIKACÍ ---
+# --- HLAVNÍ STRÁNKA ---
 
 class SpecsPage(QWidget):
     def __init__(self):
         super().__init__()
-        
+        self.specs = get_pc_specs()
+        self.nav_items = []
+        self.init_ui()
+        self.toast = MiniToast(self)
+
+    def show_copy_notification(self, text="Zkopírováno!"):
+        self.toast.setText(text)
+        self.toast.adjustSize()
+        self.toast.move((self.width() - self.toast.width()) // 2, 20)
+        self.toast.show(); self.toast.raise_()
+        QTimer.singleShot(1500, self.toast.hide)
+
+    def init_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(40, 40, 40, 40)
-        main_layout.setSpacing(20)
-        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
+        main_layout.setContentsMargins(35, 30, 35, 30); main_layout.setSpacing(25)
+
         # Header
-        lbl_head = QLabel("Specifikace Počítače")
-        lbl_head.setStyleSheet("font-size: 28px; font-weight: bold; color: white;")
-        main_layout.addWidget(lbl_head)
+        header_row = QHBoxLayout()
+        header_lbl = QLabel("Specifikace Počítače")
+        header_lbl.setStyleSheet(f"font-size: 26px; font-weight: bold; color: {COLORS['fg']};")
         
-        # 1. Řádek: Systémové info (Zůstává v řadě nahoře)
-        info_layout = QHBoxLayout()
-        info_layout.setSpacing(15)
-        info_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        
-        try:
-            pc_name = socket.gethostname()
-            os_ver = get_windows_product_name()
-            arch = platform.machine()
-        except:
-            pc_name, os_ver, arch = "Neznámé", "Windows", "x64"
+        header_row.addWidget(header_lbl); header_row.addStretch()
+        main_layout.addLayout(header_row)
 
-        # POUŽITÍ NOVÝCH IKON
-        info_layout.addWidget(InfoCard("desktop-tower-thin.png", "NÁZEV ZAŘÍZENÍ", pc_name))
-        info_layout.addWidget(InfoCard("windows-logo-thin.png", "OPERAČNÍ SYSTÉM", os_ver))
-        info_layout.addWidget(InfoCard("circuitry-thin.png", "ARCHITEKTURA", arch))
-        info_layout.addStretch()
-        
-        main_layout.addLayout(info_layout)
-        
-        # Oddělovač
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background-color: {COLORS['border']}; margin-top: 10px; margin-bottom: 10px;")
-        main_layout.addWidget(sep)
+        top_bar = QHBoxLayout()
+        top_bar.addWidget(InfoHeaderCard("desktop-thin.png", "Název zařízení", self.specs['pc_name']))
+        top_bar.addWidget(InfoHeaderCard("windows-logo-thin.png", "Operační systém", self.specs['os']))
+        top_bar.addWidget(InfoHeaderCard("circuitry-thin.png", "Architektura", platform.machine()))
+        top_bar.addStretch(); main_layout.addLayout(top_bar)
 
-        # 2. Seznam Hardwaru (VERTIKÁLNĚ)
-        lbl_hw = QLabel("HARDWARE KOMPONENTY")
-        lbl_hw.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {COLORS['sub_text']}; margin-bottom: 10px;")
-        main_layout.addWidget(lbl_hw)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine); separator.setStyleSheet(f"background-color: {COLORS['border']}; min-height: 1px; max-height: 1px; border: none;")
+        main_layout.addWidget(separator)
+
+        content_layout = QHBoxLayout(); content_layout.setSpacing(25)
+
+        self.sidebar_frame = QFrame(); self.sidebar_frame.setFixedWidth(210)
+        self.sidebar_frame.setStyleSheet(f"QFrame {{ background-color: {COLORS['bg_sidebar']}; border-radius: 12px; border: none; }}")
+        sidebar_layout = QVBoxLayout(self.sidebar_frame); sidebar_layout.setContentsMargins(10, 15, 10, 15); sidebar_layout.setSpacing(5)
+
+        sections = ["Stručný přehled", "Procesor", "Základní deska", "Grafická karta", "Paměť", "Úložiště"]
+        for i, name in enumerate(sections):
+            item = AnimatedNavItem(name, i, self)
+            item.clicked.connect(self.display_tab)
+            sidebar_layout.addWidget(item); self.nav_items.append(item)
         
-        specs = get_pc_specs()
+        sidebar_outer = QVBoxLayout(); sidebar_outer.addWidget(self.sidebar_frame); sidebar_outer.addStretch() 
+        content_layout.addLayout(sidebar_outer)
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.create_summary_page())
+        self.stack.addWidget(self.create_cpu_page())
+        self.stack.addWidget(self.create_mobo_page())
+        self.stack.addWidget(self.create_gpu_page())
+        self.stack.addWidget(self.create_ram_page())
+        self.stack.addWidget(self.create_disk_page())
+        content_layout.addWidget(self.stack)
+
+        main_layout.addLayout(content_layout)
+        self.display_tab(0)
+
+    def display_tab(self, idx):
+        if idx == 2:
+            w = self.stack.widget(2)
+            self.stack.removeWidget(w)
+            self.stack.insertWidget(2, self.create_mobo_page())
+        self.stack.setCurrentIndex(idx)
+        for i, item in enumerate(self.nav_items): item.set_active(i == idx)
+
+    def create_mobo_page(self):
+        m = self.specs['mobo']
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         
-        # Použijeme QVBoxLayout místo Gridu, aby byly pod sebou
-        hw_layout = QVBoxLayout()
-        hw_layout.setSpacing(15)
+        content = QWidget()
+        l = QVBoxLayout(content); l.setContentsMargins(0, 0, 10, 0); l.setSpacing(0)
         
-        hw_layout.addWidget(HardwareDetailWidget("Procesor (CPU)", specs['cpu']))
-        hw_layout.addWidget(HardwareDetailWidget("Grafická karta (GPU)", specs['gpu']))
-        hw_layout.addWidget(HardwareDetailWidget("Operační paměť (RAM)", specs['ram']))
-        hw_layout.addWidget(HardwareDetailWidget("Základní deska", specs['mobo']))
+        h_cont = QHBoxLayout(); h_cont.setContentsMargins(0,0,0,10)
+        lbl_info = QLabel("ZÁKLADNÍ ÚDAJE"); lbl_info.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 11px; font-weight: bold;")
+        h_cont.addWidget(lbl_info); h_cont.addStretch()
+        l.addLayout(h_cont)
         
-        main_layout.addLayout(hw_layout)
-        main_layout.addStretch()
+        l.addWidget(MoboRow("Výrobce", m['vendor']))
+        l.addWidget(MoboRow("Model", m['product']))
+        l.addWidget(MoboRow("BIOS Verze", m['bios']))
+        l.addWidget(MoboRow("Sériové číslo", m['serial']))
+        
+        l.addStretch(); scroll.setWidget(content)
+        return scroll
+
+    def create_cpu_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        l = QVBoxLayout(content); l.setContentsMargins(0, 0, 10, 0); l.setSpacing(0)
+
+        h_cont = QHBoxLayout(); h_cont.setContentsMargins(0,0,0,10)
+        lbl_info = QLabel("PROCESOR"); lbl_info.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 11px; font-weight: bold;")
+        h_cont.addWidget(lbl_info); h_cont.addStretch()
+        l.addLayout(h_cont)
+        
+        details = self.specs.get("cpu_details", {})
+        l.addWidget(MoboRow("Model", self.specs['cpu']))
+        
+        if details:
+            l.addWidget(MoboRow("Jádra / Vlákna", details.get('cores', 'N/A')))
+            l.addWidget(MoboRow("Frekvence", details.get('speed', 'N/A')))
+            l.addWidget(MoboRow("L2 Cache", details.get('l2', 'N/A')))
+            l.addWidget(MoboRow("L3 Cache", details.get('l3', 'N/A')))
+            l.addWidget(MoboRow("Socket", details.get('socket', 'N/A')))
+            l.addWidget(MoboRow("Virtualizace", details.get('virt', 'N/A')))
+        else:
+            l.addWidget(MoboRow("Architektura", platform.machine()))
+            
+        l.addStretch(); scroll.setWidget(content)
+        return scroll
+
+    def create_gpu_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        l = QVBoxLayout(content); l.setContentsMargins(0, 0, 10, 0); l.setSpacing(0)
+
+        h_cont = QHBoxLayout(); h_cont.setContentsMargins(0,0,0,10)
+        lbl_info = QLabel("GRAFICKÁ KARTA"); lbl_info.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 11px; font-weight: bold;")
+        h_cont.addWidget(lbl_info); h_cont.addStretch()
+        l.addLayout(h_cont)
+        
+        details = self.specs.get("gpu_details", {})
+        l.addWidget(MoboRow("Model", self.specs['gpu']))
+
+        if details:
+            l.addWidget(MoboRow("Video Paměť (VRAM)", details.get('vram', 'N/A')))
+            l.addWidget(MoboRow("Verze Ovladače", details.get('driver_ver', 'N/A')))
+            l.addWidget(MoboRow("Datum Ovladače", details.get('driver_date', 'N/A')))
+        
+        l.addStretch(); scroll.setWidget(content)
+        return scroll
+
+    def create_summary_page(self):
+        page = QWidget(); l = QVBoxLayout(page); l.setContentsMargins(0,0,0,0); l.setSpacing(12)
+        l.addWidget(AnimatedCard("Procesor", self.specs['cpu']))
+        
+        gpu_label = self.specs['gpu']
+        vram = self.specs.get('gpu_details', {}).get('vram', '')
+        if vram and vram != "Neznámá":
+            gpu_label += f" {vram}"
+            
+        l.addWidget(AnimatedCard("Grafická karta", gpu_label))
+        l.addWidget(AnimatedCard("Základní deska", f"{self.specs['mobo']['vendor']} {self.specs['mobo']['product']}"))
+        l.addWidget(AnimatedCard("Paměť RAM", self.specs['ram']))
+        l.addStretch(); return page
+
+    def create_ram_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
+        l = QVBoxLayout(content); l.setContentsMargins(0, 0, 10, 0); l.setSpacing(0)
+
+        h_cont = QHBoxLayout(); h_cont.setContentsMargins(0,0,0,10)
+        lbl_info = QLabel("PAMĚŤ (RAM)"); lbl_info.setStyleSheet(f"color: {COLORS['sub_text']}; font-size: 11px; font-weight: bold;")
+        h_cont.addWidget(lbl_info); h_cont.addStretch()
+        l.addLayout(h_cont)
+
+        l.addWidget(MoboRow("Celková kapacita", self.specs['ram']))
+        
+        for i, det in enumerate(self.specs['ram_details']):
+            l.addWidget(MoboRow(f"Slot {i+1}", det))
+
+        l.addStretch(); scroll.setWidget(content)
+        return scroll
+
+    def create_disk_page(self):
+        page = QWidget(); l = QVBoxLayout(page); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(5)
+        col_widths = [250, 80, 80, 90, 90] 
+        head = QFrame(); head.setStyleSheet(f"background: {COLORS['item_bg']}; border-radius: 4px;")
+        h_lay = QHBoxLayout(head); h_lay.setContentsMargins(15, 8, 15, 8); h_lay.setSpacing(0); h_lay.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        titles = ["NÁZEV DISKU", "TYP", "SBĚRNICE", "VELIKOST", "REÁLNÁ"]
+        for i, t in enumerate(titles):
+            lbl = QLabel(t); lbl.setFixedWidth(col_widths[i]); lbl.setStyleSheet(f"color: {COLORS['fg']}; font-size: 9px; font-weight: bold; border: none;")
+            h_lay.addWidget(lbl)
+        l.addWidget(head)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setStyleSheet("background: transparent; border: none;")
+        cont = QWidget(); c_lay = QVBoxLayout(cont); c_lay.setSpacing(2); c_lay.setContentsMargins(0, 5, 0, 0); c_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        for d in self.specs['storage']: c_lay.addWidget(DiskRow(d, col_widths, self))
+        c_lay.addStretch(); scroll.setWidget(cont); l.addWidget(scroll)
+        return page
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    w = SpecsPage()
+    w.resize(900, 600)
+    w.setStyleSheet(f"background-color: {COLORS['bg']};")
+    w.show()
+    sys.exit(app.exec())
