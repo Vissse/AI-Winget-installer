@@ -135,7 +135,7 @@ class SidebarDelegate(QStyledItemDelegate):
         painter.setFont(font)
         fm = painter.fontMetrics()
         tw = fm.horizontalAdvance(count_str)
-        badge_rect = QRect(option.rect.right() - 35, option.rect.top() + (option.rect.height() - 18) // 2, tw + 14, 18)
+        badge_rect = QRect(option.rect.right() - 45, option.rect.top() + (option.rect.height() - 18) // 2, tw + 14, 18)
         painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(QColor(COLORS['accent']))
         painter.drawRoundedRect(badge_rect, 9, 9)
         painter.setPen(QColor("white")); painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, count_str)

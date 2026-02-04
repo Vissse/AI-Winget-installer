@@ -89,229 +89,238 @@ def get_gpu_vendor_from_id(pnp_id):
     return ""
 
 def get_pc_specs():
-    # Pomocná funkce pro bezpečné spuštění PowerShellu a parsování JSONu
-    def run_ps_json(cmd):
-        try:
-            # -Compress a -Depth 1 zajistí, že dostaneme čistý JSON
-            full_cmd = f'powershell "try {{ {cmd} | ConvertTo-Json -Depth 1 -Compress }} catch {{}}"'
-            # errors='ignore' řeší problémy s češtinou v konzoli
-            output = subprocess.check_output(full_cmd, shell=True).decode(errors='ignore').strip()
-            if not output: return None
-            data = json.loads(output)
-            # PowerShell vrací dict pro 1 položku, list pro více. Sjednotíme na list.
-            if isinstance(data, dict): return [data]
-            return data
-        except:
-            return None
-
-    # --- 1. OPERAČNÍ SYSTÉM ---
     os_name = f"Windows {platform.release()}"
-    pc_name = socket.gethostname()
     try:
-        os_data = run_ps_json("Get-CimInstance Win32_OperatingSystem | Select-Object Caption, BuildNumber, OSArchitecture")
-        if os_data:
-            raw_caption = os_data[0].get("Caption", "")
-            os_name = raw_caption.replace("Microsoft ", "").strip()
-            # Pokud je název příliš obecný, zkusíme odvodit verzi z buildu
-            build = int(os_data[0].get("BuildNumber", 0))
-            if "Windows" not in os_name:
-                base = "Windows 11" if build >= 22000 else "Windows 10"
-                os_name = base
-    except: pass
-
-    # Inicializace struktury
-    specs = {
-        "cpu": "Neznámý Procesor", "cpu_details": {}, 
-        "gpu": "Neznámá Grafika", "gpu_details": {}, 
-        "ram": "0 GB", "ram_details": [], 
-        "mobo": {"vendor": "", "product": "Neznámá Deska", "version": "", "serial": "", "bios": ""},
-        "storage": [], "os": os_name, "pc_name": pc_name
-    }
-
-    # --- 2. CPU (Get-CimInstance Win32_Processor) ---
-    cpu_data = run_ps_json("Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, L2CacheSize, L3CacheSize, SocketDesignation, VirtualizationFirmwareEnabled")
-    if cpu_data:
-        c = cpu_data[0]
-        specs["cpu"] = c.get("Name", "Neznámý Procesor").strip()
-        speed_mhz = c.get("MaxClockSpeed", 0)
-        
-        specs["cpu_details"] = {
-            "cores": f"{c.get('NumberOfCores', 0)} Jader / {c.get('NumberOfLogicalProcessors', 0)} Vláken",
-            "speed": f"{speed_mhz / 1000:.1f} GHz" if speed_mhz else "N/A",
-            "l2": f"{c.get('L2CacheSize', 0) // 1024} MB" if c.get('L2CacheSize') else "N/A",
-            "l3": f"{c.get('L3CacheSize', 0) // 1024} MB" if c.get('L3CacheSize') else "N/A",
-            "socket": c.get("SocketDesignation", "Neznámý"),
-            "virt": "Zapnuta" if c.get("VirtualizationFirmwareEnabled") else "Vypnuta"
-        }
-
-    # --- 3. GPU (ULTRA-MODERNÍ METODA) ---
-    # Získáme základní info přes CIM
-    gpu_data_list = run_ps_json("Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, DriverDate, PNPDeviceID")
-    
-    # Proměnné pro uložení nejlepší nalezené grafiky
-    best_gpu_name = "Neznámá Grafika"
-    best_vram_gb = 0
-    best_driver_ver = "Neznámá"
-    best_driver_date = "Neznámé"
-    
-    # 1. Nejprve zkusíme zjistit VRAM přes NVIDIA-SMI (pokud jde o NVIDIA kartu)
-    # Toto je absolutně nejpřesnější metoda, která ignoruje chyby Windows
-    nvidia_vram_found = False
-    try:
-        # --query-gpu=memory.total: vrátí celkovou paměť
-        # --id=0: ptáme se první karty (většinou ta dedikovaná)
-        nvi_cmd = "nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits"
-        nvi_out = subprocess.check_output(nvi_cmd, shell=True).decode(errors='ignore').strip()
-        if nvi_out and nvi_out.isdigit():
-            # Nvidia vrací hodnotu v MB, převedeme na GB
-            val_mb = int(nvi_out)
-            best_vram_gb = round(val_mb / 1024)
-            nvidia_vram_found = True
-    except: pass
-
-    # 2. Pokud nemáme NVIDII nebo selhala, jdeme do REGISTRŮ pro 64-bit hodnotu (QwMemorySize)
-    # Toto řeší problém, kdy Windows hlásí 4GB u 8GB+ karet.
-    if not nvidia_vram_found:
+        build = int(platform.version().split('.')[-1])
+        os_base = "Windows 11" if build >= 22000 else "Windows 10"
+        # Zkusíme zjistit edici bezpečněji
         try:
-            # Hledáme HardwareInformation.QwMemorySize (64-bit)
-            # DŮLEŽITÉ: Sort-Object -Descending zajistí, že vezmeme tu kartu s nejvíce pamětí (dedikovanou), ne integrovanou.
-            reg_cmd = "Get-ItemProperty -Path 'HKLM:\\SYSTEM\\ControlSet001\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\*' -ErrorAction SilentlyContinue | Where-Object { $_.'HardwareInformation.QwMemorySize' -ne $null } | Sort-Object 'HardwareInformation.QwMemorySize' -Descending | Select-Object -First 1 -ExpandProperty 'HardwareInformation.QwMemorySize'"
+            edition_raw = subprocess.check_output('powershell "(Get-CimInstance Win32_OperatingSystem).Caption"', shell=True).decode(errors='ignore').strip()
+            if edition_raw:
+                os_name = edition_raw.replace("Microsoft ", "")
+            else:
+                os_name = f"{os_base}"
+        except:
+            os_name = os_base
+    except: pass
+
+    specs = {
+        "cpu": "Neznámý Procesor", 
+        "cpu_details": {}, 
+        "gpu": "Neznámá Grafika", 
+        "gpu_details": {}, 
+        "ram": "0 GB", 
+        "ram_details": [], 
+        "mobo": {
+            "vendor": "", "product": "Neznámá Deska", "version": "", 
+            "serial": "", "bios": ""
+        },
+        "storage": [], "os": os_name, "pc_name": socket.gethostname()
+    }
+    
+    try:
+        # --- CPU ---
+        cmd_cpu = 'powershell "Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed, L2CacheSize, L3CacheSize, SocketDesignation, VirtualizationFirmwareEnabled | ConvertTo-Json"'
+        try:
+            cpu_output = subprocess.check_output(cmd_cpu, shell=True).decode(errors='ignore')
+            if cpu_output.strip():
+                cpu_data = json.loads(cpu_output)
+                if isinstance(cpu_data, list): cpu_data = cpu_data[0]
+
+                name = cpu_data.get("Name", "Neznámý Procesor").strip()
+                cores = cpu_data.get("NumberOfCores", 0)
+                threads = cpu_data.get("NumberOfLogicalProcessors", 0)
+                speed_mhz = cpu_data.get("MaxClockSpeed", 0)
+                speed_ghz = f"{speed_mhz / 1000:.1f} GHz" if speed_mhz else "N/A"
+                l2_kb = cpu_data.get("L2CacheSize", 0); l2_mb = f"{l2_kb // 1024} MB" if l2_kb else "N/A"
+                l3_kb = cpu_data.get("L3CacheSize", 0); l3_mb = f"{l3_kb // 1024} MB" if l3_kb else "N/A"
+                socket_type = cpu_data.get("SocketDesignation", "Neznámý")
+                virt = "Zapnuta" if cpu_data.get("VirtualizationFirmwareEnabled") else "Vypnuta"
+
+                specs["cpu"] = name
+                specs["cpu_details"] = { "cores": f"{cores} Jader / {threads} Vláken", "speed": speed_ghz, "l2": l2_mb, "l3": l3_mb, "socket": socket_type, "virt": virt }
+        except: specs["cpu"] = "Chyba načítání CPU"
+
+        # --- GPU ---
+        cmd_gpu_basic = 'powershell "Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, DriverDate, PNPDeviceID | ConvertTo-Json"'
+        try:
+            gpu_output = subprocess.check_output(cmd_gpu_basic, shell=True).decode(errors='ignore')
             
-            reg_out = subprocess.check_output(f'powershell "{reg_cmd}"', shell=True).decode(errors='ignore').strip()
+            vram_final_gb = "Neznámá"
             
-            if reg_out.isdigit() and int(reg_out) > 0:
-                reg_val = int(reg_out)
-                # Převod z bajtů na GB
-                best_vram_gb = round(reg_val / (1024**3))
+            # 1. NVIDIA-SMI (Nejpřesnější pro NVIDIA)
+            try:
+                nvidia_size_cmd = "nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits"
+                nvidia_size_out = subprocess.check_output(nvidia_size_cmd, shell=True).decode(errors='ignore').strip()
+                if nvidia_size_out and nvidia_size_out.isdigit():
+                    gb_val = int(nvidia_size_out) / 1024
+                    vram_final_gb = f"{int(gb_val)} GB" if gb_val.is_integer() else f"{gb_val:.1f} GB"
+            except: pass
+
+            # 2. Registry (Funguje pro AMD i NVIDIA, ale potřebuje někdy Admina)
+            if vram_final_gb == "Neznámá":
+                try:
+                    cmd_gpu_reg = 'powershell "Get-ItemProperty -Path \'HKLM:\\SYSTEM\\ControlSet001\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\*\' -ErrorAction SilentlyContinue | Where-Object { $_.\'HardwareInformation.QwMemorySize\' -ne $null } | Sort-Object \'HardwareInformation.QwMemorySize\' -Descending | Select-Object -First 1 -ExpandProperty \'HardwareInformation.QwMemorySize\'"'
+                    reg_out = subprocess.check_output(cmd_gpu_reg, shell=True).decode(errors='ignore').strip()
+                    if reg_out and reg_out.isdigit() and int(reg_out) > 0:
+                        vram_final_gb = f"{round(int(reg_out) / (1024**3))} GB"
+                except: pass
+
+            if gpu_output.strip():
+                gpu_data = json.loads(gpu_output)
+                if isinstance(gpu_data, list): gpu_data = gpu_data[0]
+
+                g_name = gpu_data.get("Name", "Neznámá Grafika")
+                pnp_id = gpu_data.get("PNPDeviceID", "")
+                
+                subvendor = get_gpu_vendor_from_id(pnp_id)
+                if subvendor and subvendor not in g_name.upper():
+                    g_name = f"{subvendor} {g_name}"
+
+                drv_ver = gpu_data.get("DriverVersion", "Neznámá")
+                drv_date = format_wmi_date(gpu_data.get("DriverDate", ""))
+
+                # 3. WMI Fallback (Pokud selže vše výše)
+                if vram_final_gb == "Neznámá":
+                    try:
+                        # Zkusíme načíst AdapterRAM, ale pozor na 4GB limit u WMI
+                        cmd_wmi_ram = 'powershell "Get-CimInstance Win32_VideoController | Select-Object AdapterRAM | ConvertTo-Json"'
+                        ram_out_json = subprocess.check_output(cmd_wmi_ram, shell=True).decode(errors='ignore')
+                        if ram_out_json.strip():
+                            ram_out = json.loads(ram_out_json)
+                            if isinstance(ram_out, list): ram_out = ram_out[0]
+                            wmi_bytes = ram_out.get("AdapterRAM", 0)
+                            # Pokud WMI vrátí záporné číslo (int overflow) nebo cca 4GB, je to podezřelé, ale lepší než nic
+                            if wmi_bytes:
+                                if wmi_bytes < 0: wmi_bytes += 2**32 # Oprava overflow
+                                gb_val = wmi_bytes / (1024**3)
+                                vram_final_gb = f"{round(gb_val)} GB"
+                    except: pass
+                
+                if ".0 GB" in vram_final_gb: vram_final_gb = vram_final_gb.replace(".0 GB", " GB")
+
+                specs["gpu"] = g_name
+                specs["gpu_details"] = { "vram": vram_final_gb, "driver_ver": drv_ver, "driver_date": drv_date }
+        except: specs["gpu"] = "Chyba GPU"
+
+        # --- Motherboard ---
+        try:
+            cmd_mb = 'powershell "Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer, Product, Version, SerialNumber | ConvertTo-Json"'
+            mb_output = subprocess.check_output(cmd_mb, shell=True).decode(errors='ignore')
+            if mb_output.strip():
+                mb_data = json.loads(mb_output)
+                if isinstance(mb_data, list): mb_data = mb_data[0]
+                specs["mobo"]["vendor"] = mb_data.get("Manufacturer", "").strip()
+                prod = mb_data.get("Product", "").strip()
+                specs["mobo"]["product"] = mb_data.get("Version", prod) if "Ltd" in prod else prod
+                specs["mobo"]["version"] = mb_data.get("Version", "").strip()
+                specs["mobo"]["serial"] = mb_data.get("SerialNumber", "").strip()
         except: pass
 
-    # Zpracování jména a detailů (vezmeme z CIM, protože tam jsou hezká jména)
-    if gpu_data_list:
-        # Pokud jich je víc, zkusíme najít tu, která není Intel/Integrovaná, pokud máme velkou VRAM
-        target_gpu = gpu_data_list[0]
-        
-        # Pokud jsme detekovali velkou VRAM (>2GB), snažíme se najít odpovídající název v seznamu
-        if len(gpu_data_list) > 1 and best_vram_gb > 2:
-            for g in gpu_data_list:
-                n = g.get("Name", "").upper()
-                # Pokud název obsahuje NVIDIA, AMD nebo RTX, GTX, RX.. pravděpodobně to je ta hlavní
-                if any(x in n for x in ["NVIDIA", "AMD", "RADEON", "GEFORCE", "RTX", "GTX"]):
-                    target_gpu = g
-                    break
-        
-        g_name = target_gpu.get("Name", "Neznámá Grafika")
-        pnp_id = target_gpu.get("PNPDeviceID", "")
-        
-        # Detekce výrobce (ASUS, MSI...)
-        subvendor = get_gpu_vendor_from_id(pnp_id)
-        if subvendor and subvendor not in g_name.upper():
-            g_name = f"{subvendor} {g_name}"
-            
-        best_gpu_name = g_name
-        best_driver_ver = target_gpu.get("DriverVersion", "Neznámá")
-        best_driver_date = format_wmi_date(target_gpu.get("DriverDate", ""))
-
-    # Finální zápis do specs
-    specs["gpu"] = best_gpu_name
-    
-    # Formátování VRAM stringu
-    vram_str = f"{best_vram_gb} GB" if best_vram_gb > 0 else "Neznámá"
-    
-    specs["gpu_details"] = {
-        "vram": vram_str,
-        "driver_ver": best_driver_ver,
-        "driver_date": best_driver_date
-    }
-
-    # --- 4. ZÁKLADNÍ DESKA & BIOS ---
-    mb_data = run_ps_json("Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer, Product, Version, SerialNumber")
-    bios_data = run_ps_json("Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate")
-    
-    if mb_data:
-        m = mb_data[0]
-        specs["mobo"]["vendor"] = m.get("Manufacturer", "").strip()
-        specs["mobo"]["product"] = m.get("Product", "").strip()
-        specs["mobo"]["version"] = m.get("Version", "").strip()
-        specs["mobo"]["serial"] = m.get("SerialNumber", "").strip()
-    
-    if bios_data:
-        b = bios_data[0]
-        formatted_date = f" ({format_wmi_date(b.get('ReleaseDate', ''))})"
-        specs["mobo"]["bios"] = f"{b.get('SMBIOSBIOSVersion', '')}{formatted_date}"
-
-    # --- 5. RAM (Win32_PhysicalMemory) ---
-    ram_list = run_ps_json("Get-CimInstance Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber")
-    if ram_list:
-        total_cap = 0
-        for r in ram_list:
-            cap = r.get("Capacity", 0)
-            total_cap += cap
-            man = r.get("Manufacturer", "Unknown").strip()
-            part = r.get("PartNumber", "Unknown").strip()
-            speed = r.get("Speed", "Unknown")
-            specs["ram_details"].append(f"{man} {part}\n{cap // (1024**3)} GB @ {speed} MHz")
-        
-        specs["ram"] = f"{round(total_cap / (1024**3))} GB"
-
-    # --- 6. ÚLOŽIŠTĚ (Smart Fallback) ---
-    # Fáze A: Zkusíme Get-PhysicalDisk (Nejlepší data, ale vyžaduje někdy Admina)
-    disks_found = False
-    try:
-        ph_disks = run_ps_json("Get-PhysicalDisk | Select-Object FriendlyName, MediaType, BusType, SpindleSpeed, Size")
-        if ph_disks:
-            for d in ph_disks:
-                size = d.get("Size", 0)
-                if size == 0: continue # Ignorujeme nulové disky
-                
-                name = d.get("FriendlyName", "Unknown")
-                m_type = d.get("MediaType", "Unspecified")
-                bus = d.get("BusType", "Unknown")
-                
-                # Upřesnění typu, pokud chybí
-                if m_type == "Unspecified":
-                    if "SSD" in name.upper(): m_type = "SSD"
-                    elif "HDD" in name.upper() or d.get("SpindleSpeed", 0) > 0: m_type = "HDD"
-
-                real_gb = round(size / (1024**3))
-                specs["storage"].append({
-                    "name": name,
-                    "type": m_type,
-                    "bus": "NVMe" if bus == "NVMe" else bus,
-                    "real_size": f"{real_gb} GB",
-                    "market_size": get_market_size(real_gb)
-                })
-            disks_found = True
-    except: pass
-
-    # Fáze B: Pokud Fáze A selhala (prázdný seznam nebo chyba práv), použijeme Win32_DiskDrive (Funguje VŽDY)
-    if not disks_found:
+        # --- BIOS ---
         try:
-            wmi_disks = run_ps_json("Get-CimInstance Win32_DiskDrive | Select-Object Model, InterfaceType, Size, MediaType")
-            if wmi_disks:
-                for d in wmi_disks:
-                    size = d.get("Size", 0)
-                    if size == 0: continue
+            cmd_bios = 'powershell "Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion, ReleaseDate | ConvertTo-Json"'
+            bios_output = subprocess.check_output(cmd_bios, shell=True).decode(errors='ignore')
+            if bios_output.strip():
+                bios_data = json.loads(bios_output)
+                if isinstance(bios_data, list): bios_data = bios_data[0]
+                bios_ver = bios_data.get("SMBIOSBIOSVersion", "")
+                formatted_date = f" ({format_wmi_date(bios_data.get('ReleaseDate', ''))})"
+                specs["mobo"]["bios"] = f"{bios_ver}{formatted_date}"
+        except: pass
+        
+        # --- RAM (Oprava: Použití PowerShell místo WMIC) ---
+        try:
+            # Původní WMIC kód smazán, nahrazeno PowerShell Get-CimInstance
+            ram_cmd = 'powershell "Get-CimInstance Win32_PhysicalMemory | Select-Object Capacity, Speed, Manufacturer, PartNumber | ConvertTo-Json"'
+            ram_output = subprocess.check_output(ram_cmd, shell=True).decode(errors='ignore')
+            
+            if ram_output.strip():
+                ram_data_list = json.loads(ram_output)
+                if isinstance(ram_data_list, dict): ram_data_list = [ram_data_list] # Pokud je jen jedna RAM
+                
+                total_ram_bytes = 0
+                for ram in ram_data_list:
+                    cap = ram.get('Capacity', 0)
+                    if cap:
+                        total_ram_bytes += cap
+                        manufacturer = ram.get('Manufacturer', 'Unknown').strip()
+                        part_num = ram.get('PartNumber', 'Unknown').strip()
+                        speed = ram.get('Speed', 'Unknown')
+                        specs["ram_details"].append(f"{manufacturer} {part_num}\n{cap // (1024**3)} GB @ {speed} MHz")
+                
+                if total_ram_bytes > 0:
+                    specs["ram"] = f"{round(total_ram_bytes / (1024**3))} GB"
+        except: 
+            specs["ram"] = "Chyba detekce RAM"
 
-                    name = d.get("Model", "Unknown Disk")
-                    bus = d.get("InterfaceType", "Unknown")
-                    
-                    # Odhad technologie, protože Win32_DiskDrive nezná "SSD" přímo
-                    m_type = "HDD" 
-                    if "SSD" in name.upper() or "NVMe" in name.upper(): m_type = "SSD"
-                    if "NVMe" in name.upper(): bus = "NVMe"
+        # --- Storage (Oprava: Fallback pokud selže Get-PhysicalDisk) ---
+        try:
+            # Metoda 1: Get-PhysicalDisk (Nejlepší, ale potřebuje často Admina nebo novější OS)
+            ps_cmd = 'powershell "Get-PhysicalDisk | Select-Object FriendlyName, MediaType, BusType, SpindleSpeed, Size | ConvertTo-Json"'
+            disks_raw = subprocess.check_output(ps_cmd, shell=True).decode(errors='ignore')
+            
+            # Pokud Metoda 1 selže nebo vrátí prázdno (kvůli právům), zkusíme Metodu 2
+            if not disks_raw.strip():
+                 raise Exception("Empty PhysicalDisk")
 
-                    real_gb = round(size / (1024**3))
+            disks_data = json.loads(disks_raw)
+            if isinstance(disks_data, dict): disks_data = [disks_data] 
+
+            for d in disks_data:
+                name = d.get('FriendlyName', 'Unknown')
+                media_type = d.get('MediaType', 'Unspecified')
+                bus = d.get('BusType', 'Unknown')
+                spindle = d.get('SpindleSpeed', 0)
+                size_bytes = d.get('Size', 0)
+
+                if media_type == 'Unspecified':
+                    if spindle > 0: media_type = 'HDD'
+                    elif 'HD' in name and 'SSD' not in name: media_type = 'HDD'
+                    elif 'SSD' in name: media_type = 'SSD'
+
+                if size_bytes:
+                    real_gb = round(size_bytes / (1024**3))
                     specs["storage"].append({
                         "name": name,
-                        "type": m_type,
-                        "bus": bus,
+                        "type": media_type,
+                        "bus": "NVMe" if bus == "NVMe" else bus,
                         "real_size": f"{real_gb} GB",
                         "market_size": get_market_size(real_gb)
                     })
-        except: pass
+        except:
+            # Metoda 2: Win32_DiskDrive (Fallback - funguje i bez Admin práv, ale méně detailů)
+            try:
+                cmd_fallback = 'powershell "Get-CimInstance Win32_DiskDrive | Select-Object Model, InterfaceType, Size, MediaType | ConvertTo-Json"'
+                fallback_raw = subprocess.check_output(cmd_fallback, shell=True).decode(errors='ignore')
+                if fallback_raw.strip():
+                    fb_data = json.loads(fallback_raw)
+                    if isinstance(fb_data, dict): fb_data = [fb_data]
+                    
+                    for d in fb_data:
+                        name = d.get('Model', 'Unknown Disk')
+                        bus = d.get('InterfaceType', 'Unknown')
+                        size_bytes = d.get('Size', 0)
+                        media_type = d.get('MediaType', 'Unknown') # Často bývá "Fixed hard disk media"
+                        
+                        # Pokus o odhad typu z názvu
+                        simple_type = "HDD"
+                        if "SSD" in name.upper(): simple_type = "SSD"
+                        elif "NVMe" in name.upper(): simple_type = "SSD"; bus = "NVMe"
+                        
+                        if size_bytes:
+                            real_gb = round(size_bytes / (1024**3))
+                            specs["storage"].append({
+                                "name": name,
+                                "type": simple_type,
+                                "bus": bus,
+                                "real_size": f"{real_gb} GB",
+                                "market_size": get_market_size(real_gb)
+                            })
+            except: pass
 
+    except: pass
     return specs
-
 # --- UI KOMPONENTY ---
 
 class MoboRow(QFrame):
